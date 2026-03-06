@@ -42,24 +42,22 @@ app.add_middleware(
     secret_key=settings.SESSION_SECRET_KEY
 )
 
-# --- FIX: Updated CORS Middleware ---
-if settings.FRONTEND_URL:
-    origins = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000", # Backend itself (Swagger UI)
-        "http://127.0.0.1:8000",
-        settings.FRONTEND_URL
-    ]
-else:
-    origins = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ]
+# --- CORS Middleware ---
+origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000", # Backend itself (Swagger UI)
+    "http://127.0.0.1:8000",
+    # Production frontend — always include as a hardcoded fallback
+    "https://twinly-ai.vercel.app",
+    "https://www.twinly-ai.vercel.app",
+]
+
+# Also add whatever is set in FRONTEND_URL env var (e.g. a custom domain)
+if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:
+    origins.append(settings.FRONTEND_URL)
+
 
 app.add_middleware(
     CORSMiddleware,
