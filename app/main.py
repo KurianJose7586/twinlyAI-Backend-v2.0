@@ -43,13 +43,23 @@ app.add_middleware(
 )
 
 # --- FIX: Updated CORS Middleware ---
-origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000", # Backend itself (Swagger UI)
-    "http://127.0.0.1:8000",
-]
+if settings.FRONTEND_URL:
+    origins = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000", # Backend itself (Swagger UI)
+        "http://127.0.0.1:8000",
+        settings.FRONTEND_URL
+    ]
+else:
+    origins = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
 
 app.add_middleware(
     CORSMiddleware,

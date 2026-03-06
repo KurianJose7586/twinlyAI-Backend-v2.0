@@ -42,5 +42,5 @@ COPY --from=downloader /models /code/models
 COPY ./app /code/app
 COPY ./data /code/data
 
-# FIX: Use JSON format for CMD to fix the OS signal warning
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# FIX: Use sh -c to evaluate the $PORT environment variable (defaulting to 7860)
+CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"
