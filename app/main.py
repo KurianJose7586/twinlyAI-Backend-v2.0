@@ -1,10 +1,9 @@
 # app/main.py
 
-from fastapi import FastAPI, APIRouter, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
-from app.api.v1.endpoints import auth, bots, api_keys, users, oauth, recruiter
-from app.api.v1.endpoints import webhooks
+from app.api.v1.endpoints import auth, bots, api_keys, users, oauth, recruiter, webhooks
 from app.core.rate_limit import setup_rate_limiting
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -47,17 +46,14 @@ origins = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
-    "http://localhost:8000", # Backend itself (Swagger UI)
+    "http://localhost:8000", 
     "http://127.0.0.1:8000",
-    # Production frontend — always include as a hardcoded fallback
     "https://twinly-ai.vercel.app",
     "https://www.twinly-ai.vercel.app",
 ]
 
-# Also add whatever is set in FRONTEND_URL env var (e.g. a custom domain)
 if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:
     origins.append(settings.FRONTEND_URL)
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,12 +64,13 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Include Routers
+# --- Include Routers ---
+# Note: oauth prefix changed to /oauth to avoid collision with auth
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(oauth.router, prefix="/api/v1/oauth", tags=["oauth"]) 
 app.include_router(bots.router, prefix="/api/v1/bots", tags=["bots"])
 app.include_router(api_keys.router, prefix="/api/v1/api-keys", tags=["api_keys"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(oauth.router, prefix="/api/v1/auth", tags=["oauth"])
 app.include_router(recruiter.router, prefix="/api/v1/recruiter", tags=["recruiter"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
 
