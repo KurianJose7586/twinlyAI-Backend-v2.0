@@ -7,13 +7,10 @@ import pdfplumber
 from docx import Document as DocxDocument
 import shutil
 
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -28,26 +25,15 @@ from typing import List
 
 # --- GLOBAL MODEL CACHE ---
 _EMBEDDINGS_MODEL = None
-_RERANKER_MODEL = None
-_SPARSE_EMBEDDINGS_MODEL = None
 
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
     if _EMBEDDINGS_MODEL is None:
-        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
+            api_key=settings.HUGGINGFACE_API_KEY,
+            model_name="BAAI/bge-small-en-v1.5"
+        )
     return _EMBEDDINGS_MODEL
-
-def get_sparse_embeddings_model():
-    global _SPARSE_EMBEDDINGS_MODEL
-    if _SPARSE_EMBEDDINGS_MODEL is None:
-        _SPARSE_EMBEDDINGS_MODEL = FastEmbedSparse(model_name="Qdrant/bm25")
-    return _SPARSE_EMBEDDINGS_MODEL
-
-def get_reranker_model():
-    global _RERANKER_MODEL
-    if _RERANKER_MODEL is None:
-        _RERANKER_MODEL = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
-    return _RERANKER_MODEL
 
 # --- Pydantic model for metadata extraction ---
 class ResumeMetadata(BaseModel):
@@ -124,9 +110,7 @@ class RAGPipeline:
                 return QdrantVectorStore(
                     client=self.qdrant_client, 
                     collection_name=self.collection_name, 
-                    embedding=self.embeddings,
-                    sparse_embedding=get_sparse_embeddings_model(),
-                    retrieval_mode=RetrievalMode.HYBRID
+                    embedding=self.embeddings
                 )
             except Exception as e:
                 print(f"Error loading Qdrant vector store: {e}")
@@ -160,15 +144,8 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
             if not self.vector_store:
                 return "Resume vector store not initialized."
             
-            base_retriever = self.vector_store.as_retriever(search_kwargs={"k": 20})
-            reranker_model = get_reranker_model()
-            compressor = CrossEncoderReranker(model=reranker_model, top_n=5)
-            compression_retriever = ContextualCompressionRetriever(
-                base_compressor=compressor, 
-                base_retriever=base_retriever
-            )
-            
-            docs = compression_retriever.invoke(query)
+            base_retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
+            docs = base_retriever.invoke(query)
             return "\n\n".join([doc.page_content for doc in docs])
         
         @tool
@@ -188,17 +165,15 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
         text_content = extract_text_from_file(Path(file_path))
         documents = [Document(page_content=text_content)]
         
-        # --- SEMANTIC CHUNKING ---
-        # Breaks text based on semantic meaning rather than arbitrary token counts
-        text_splitter = SemanticChunker(self.embeddings, breakpoint_threshold_type="percentile")
+        # --- RECURSIVE CHARACTER TEXT SPLITTER ---
+        # Faster and avoids excessive API calls during embedding
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
         splits = text_splitter.split_documents(documents)
 
         # Build Qdrant store
         self.vector_store = QdrantVectorStore.from_documents(
             documents=splits, 
             embedding=self.embeddings,
-            sparse_embedding=get_sparse_embeddings_model(),
-            retrieval_mode=RetrievalMode.HYBRID,
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY,
             collection_name=self.collection_name
@@ -366,8 +341,6 @@ class GlobalRecruiterIndex:
         QdrantVectorStore.from_documents(
             documents=[doc],
             embedding=self.embeddings,
-            sparse_embedding=get_sparse_embeddings_model(),
-            retrieval_mode=RetrievalMode.HYBRID,
             url=settings.QDRANT_URL,
             api_key=settings.QDRANT_API_KEY,
             collection_name=self.collection_name
@@ -377,7 +350,6 @@ class GlobalRecruiterIndex:
     def semantic_search(self, query: str, k: int = 10) -> List[str]:
         """
         Performs a semantic search and returns a list of matching bot_ids.
-        Uses Cross-Encoder Reranking for much higher precision.
         """
         if not self.qdrant_client.collection_exists(self.collection_name):
             return []
@@ -386,29 +358,18 @@ class GlobalRecruiterIndex:
             vector_store = QdrantVectorStore(
                 client=self.qdrant_client,
                 collection_name=self.collection_name,
-                embedding=self.embeddings,
-                sparse_embedding=get_sparse_embeddings_model(),
-                retrieval_mode=RetrievalMode.HYBRID
+                embedding=self.embeddings
             )
             
-            # Fetch broader candidate pool for reranking
-            initial_results = vector_store.similarity_search(query, k=30)
+            initial_results = vector_store.similarity_search(query, k=k)
             
             if not initial_results:
                 return []
                 
-            # Rerank with CrossEncoder
-            reranker_model = get_reranker_model()
-            compressor = CrossEncoderReranker(model=reranker_model, top_n=k)
-            
-            # Rerank the documents
-            reranked_docs = compressor.compress_documents(initial_results, query)
-            
             # Return only the bot_ids from the uniquely sorted docs
-            # Make sure we don't return duplicates if multiple chunks match one bot
             seen = set()
             unique_bot_ids = []
-            for doc in reranked_docs:
+            for doc in initial_results:
                 b_id = doc.metadata.get("bot_id")
                 if b_id and b_id not in seen:
                     seen.add(b_id)

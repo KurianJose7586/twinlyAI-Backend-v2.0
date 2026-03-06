@@ -19,14 +19,11 @@ langchain-groq
 langchain-core
 langchain-text-splitters
 langchain-huggingface
-faiss-cpu
-sentence-transformers
 pdfplumber
 python-docx
 groq
 qdrant-client
 langchain-qdrant
-langchain-experimental
 
 # Pydantic for data validation
 pydantic
