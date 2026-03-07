@@ -20,6 +20,7 @@ async def create_user(user_in: UserCreate):
         "hashed_password": hashed_password,
         "role": user_in.role  # Ensure role is saved to DB
     }
+    #fix attemot fail
     
     try:
         await users_collection.insert_one(user_doc)
