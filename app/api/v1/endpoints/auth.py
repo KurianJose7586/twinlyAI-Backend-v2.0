@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
 from app.schemas.user import UserCreate, User
 from app.db.session import users_collection
 from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.config import settings
 from pymongo.errors import DuplicateKeyError
 
 router = APIRouter()
@@ -18,9 +20,9 @@ async def create_user(user_in: UserCreate):
     user_doc = {
         "email": user_in.email,
         "hashed_password": hashed_password,
-        "role": user_in.role  # Ensure role is saved to DB
+        "role": user_in.role,
+        "subscription_tier": "free",  # Bug fix: explicitly set in DB document
     }
-    #fix attemot fail
     
     try:
         await users_collection.insert_one(user_doc)
@@ -63,7 +65,10 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
             )
         
         # Optionally include role in the token claims if needed later
-        access_token = create_access_token(data={"sub": user["email"], "role": user.get("role", "candidate")})
+        access_token = create_access_token(
+            data={"sub": user["email"], "role": user.get("role", "candidate")},
+            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
         return {"access_token": access_token, "token_type": "bearer"}
     except HTTPException:
         raise

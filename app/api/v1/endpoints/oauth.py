@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Request
 from authlib.integrations.starlette_client import OAuth
 from starlette.responses import RedirectResponse
+from datetime import timedelta
 from app.core.config import settings
 from app.db.session import users_collection
 from app.core.security import create_access_token
@@ -60,15 +61,21 @@ async def auth_callback(request: Request, provider: str):
     user = await users_collection.find_one({"email": email})
 
     if not user:
-        # Create new user if not exists
+        # New OAuth user — create with default role and re-fetch so token has correct data
         new_user = {
-            "email": email, 
+            "email": email,
             "hashed_password": "",
-            "role": "candidate" # Default role
+            "role": "candidate",  # Default role for new OAuth users
+            "subscription_tier": "free",
         }
         await users_collection.insert_one(new_user)
+        # Re-fetch so we use the freshly created document (not the stale None)
+        user = await users_collection.find_one({"email": email})
 
-    access_token = create_access_token(data={"sub": email, "role": user.get("role", "candidate") if user else "candidate"})
+    access_token = create_access_token(
+        data={"sub": email, "role": user.get("role", "candidate") if user else "candidate"},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
     
     # --- FIX: Dynamic Redirect to Frontend ---
     response = RedirectResponse(url=f"{settings.FRONTEND_URL}/login?token={access_token}")
