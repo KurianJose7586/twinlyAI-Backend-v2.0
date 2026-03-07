@@ -350,33 +350,60 @@ class GlobalRecruiterIndex:
     def semantic_search(self, query: str, k: int = 10) -> List[str]:
         """
         Performs a semantic search and returns a list of matching bot_ids.
+
+        Bypasses LangChain's QdrantVectorStore for the search query to avoid
+        hybrid-vector name-mismatch issues. Instead:
+          1. Embeds the query with HuggingFace directly
+          2. Queries Qdrant using the unnamed dense vector (key='')
         """
+        import traceback
+
         if not self.qdrant_client.collection_exists(self.collection_name):
+            print(f"[GlobalRecruiterIndex] Collection '{self.collection_name}' does not exist.")
             return []
-            
+
         try:
-            vector_store = QdrantVectorStore(
-                client=self.qdrant_client,
+            # Step 1: Embed the query using HuggingFace Inference API
+            print(f"[GlobalRecruiterIndex] Embedding query: '{query[:80]}'")
+            query_vector = self.embeddings.embed_query(query)
+            print(f"[GlobalRecruiterIndex] Query embedded successfully, dim={len(query_vector)}")
+        except Exception as e:
+            print(f"[GlobalRecruiterIndex] ❌ Embedding failed: {e}")
+            traceback.print_exc()
+            raise RuntimeError(f"Failed to embed search query (HuggingFace API error): {e}") from e
+
+        try:
+            # Step 2: Query Qdrant directly using the dense vector (named '')
+            # This bypasses LangChain's QdrantVectorStore which can silently fail
+            # on hybrid collections (dense '' + sparse 'langchain-sparse').
+            results = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
-                embedding=self.embeddings
+                query=query_vector,
+                using="",      # explicitly use the unnamed dense vector
+                limit=k,
+                with_payload=True,
             )
-            
-            initial_results = vector_store.similarity_search(query, k=k)
-            
-            if not initial_results:
-                return []
-                
-            # Return only the bot_ids from the uniquely sorted docs
-            seen = set()
-            unique_bot_ids = []
-            for doc in initial_results:
-                b_id = doc.metadata.get("bot_id")
-                if b_id and b_id not in seen:
-                    seen.add(b_id)
-                    unique_bot_ids.append(b_id)
-            
+            points = results.points
+            print(f"[GlobalRecruiterIndex] Qdrant returned {len(points)} points.")
+
+            # Extract unique bot_ids in relevance order
+            seen: set = set()
+            unique_bot_ids: List[str] = []
+            for pt in points:
+                payload = pt.payload or {}
+                # LangChain stores metadata nested: {"page_content": ..., "metadata": {"bot_id": ...}}
+                bot_id = (
+                    payload.get("metadata", {}).get("bot_id")
+                    or payload.get("bot_id")
+                )
+                if bot_id and bot_id not in seen:
+                    seen.add(bot_id)
+                    unique_bot_ids.append(bot_id)
+
+            print(f"[GlobalRecruiterIndex] Unique bot_ids found: {unique_bot_ids}")
             return unique_bot_ids
 
         except Exception as e:
-            print(f"Error searching global Qdrant index: {e}")
-            return []
+            print(f"[GlobalRecruiterIndex] ❌ Qdrant search failed: {e}")
+            traceback.print_exc()
+            raise RuntimeError(f"Qdrant search failed: {e}") from e

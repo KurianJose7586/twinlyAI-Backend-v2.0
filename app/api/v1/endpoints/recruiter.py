@@ -70,56 +70,86 @@ async def search_candidates(
         return []
 
     try:
-        # 1. Initialize Index and Run Vector Search
-        # Note: This returns a list of ID strings (e.g. ['60d5...', '60d6...'])
+        # 1. Run vector semantic search (now raises RuntimeError on failure instead of silent [])
         global_index = GlobalRecruiterIndex()
         matching_bot_ids = global_index.semantic_search(search_request.query, k=10)
 
+    except RuntimeError as e:
+        # Vector search failed (HuggingFace API down / Qdrant issue).
+        # Fall back to MongoDB text search so recruiters always get results.
+        print(f"[/search] Vector search failed, falling back to MongoDB text search: {e}")
+        try:
+            query_words = search_request.query.strip().split()
+            regex_pattern = "|".join(query_words)
+            fallback_cursor = bots_collection.find({
+                "$or": [
+                    {"name": {"$regex": regex_pattern, "$options": "i"}},
+                    {"summary": {"$regex": regex_pattern, "$options": "i"}},
+                    {"skills": {"$elemMatch": {"$regex": regex_pattern, "$options": "i"}}},
+                ]
+            })
+            fallback_candidates = await fallback_cursor.to_list(20)
+            formatted_fallback = []
+            for res in fallback_candidates:
+                skills_list = res.get("skills", [])
+                if not isinstance(skills_list, list):
+                    skills_list = []
+                formatted_fallback.append({
+                    "id": str(res["_id"]),
+                    "name": res.get("name", "Unknown Candidate"),
+                    "match_score": 0,
+                    "skills": skills_list,
+                    "summary": res.get("summary", "No summary available."),
+                    "experience_years": res.get("experience_years", 0),
+                    "resume_url": res.get("resume_url"),
+                    "thumbnail_url": res.get("thumbnail_url"),
+                    "avatar_url": res.get("avatar_url")
+                })
+            return formatted_fallback
+        except Exception as fallback_err:
+            print(f"[/search] MongoDB fallback also failed: {fallback_err}")
+            raise HTTPException(status_code=500, detail=f"Search unavailable: {str(e)}")
+
+    except Exception as e:
+        print(f"[/search] Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error performing search: {str(e)}")
+
+    try:
         if not matching_bot_ids:
             return []
 
-        # 2. Fetch Full Documents from MongoDB
-        # We need to convert string IDs to ObjectIds for the DB query
+        # 2. Fetch full documents from MongoDB using matched bot_ids
         bot_object_ids = [ObjectId(bid) for bid in matching_bot_ids]
-        
         candidates_cursor = bots_collection.find({"_id": {"$in": bot_object_ids}})
         candidates = await candidates_cursor.to_list(100)
 
-        # 3. Format the results safely
-        formatted_results = []
-        
-        # Helper map to preserve search order (relevance)
+        # 3. Format results, preserving relevance order from vector search
         candidates_map = {str(c["_id"]): c for c in candidates}
+        formatted_results = []
 
         for bid in matching_bot_ids:
             res = candidates_map.get(bid)
             if not res:
                 continue
 
-            # --- FIX: Use .get() to avoid 'skills' KeyError ---
             skills_list = res.get("skills", [])
-            
-            # Ensure skills is actually a list (handle None or strings)
             if not isinstance(skills_list, list):
-                skills_list = [] 
+                skills_list = []
 
             formatted_results.append({
                 "id": str(res["_id"]),
                 "name": res.get("name", "Unknown Candidate"),
-                # 'score' might not be available from Mongo, 
-                # usually vector engines return it separately. 
-                # For now we can omit it or set a default.
-                "match_score": 0, 
-                "skills": skills_list,  # Safe access
+                "match_score": 0,
+                "skills": skills_list,
                 "summary": res.get("summary", "No summary available."),
                 "experience_years": res.get("experience_years", 0),
                 "resume_url": res.get("resume_url"),
                 "thumbnail_url": res.get("thumbnail_url"),
                 "avatar_url": res.get("avatar_url")
             })
-            
+
         return formatted_results
 
     except Exception as e:
-        print(f"Search Error: {str(e)}") # Print to console for debugging
-        raise HTTPException(status_code=500, detail=f"Error performing semantic search: {str(e)}")
+        print(f"[/search] MongoDB fetch error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching candidate details: {str(e)}")
