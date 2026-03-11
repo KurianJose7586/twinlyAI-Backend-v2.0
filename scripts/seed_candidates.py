@@ -160,7 +160,7 @@ async def seed():
         bot_id = str(result.inserted_id)
 
         # Generate PDF
-        pdf_path = storage_root / f"{bot_id}.pdf"
+        pdf_path = storage_root / "{}.pdf".format(bot_id)
         generate_resume_pdf(candidate_data, pdf_path)
         
         # Add to Global Index (Semantic Only)
@@ -212,7 +212,7 @@ async def seed():
         bot_id = str(result.inserted_id)
 
         # Generate PDF
-        pdf_path = storage_root / f"{bot_id}.pdf"
+        pdf_path = storage_root / "{}.pdf".format(bot_id)
         generate_resume_pdf(candidate_data, pdf_path)
         
         # --- DEEP RAG PROCESSING ---

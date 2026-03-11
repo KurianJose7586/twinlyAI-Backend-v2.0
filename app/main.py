@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
     try:
         await users_collection.create_index("email", unique=True)
     except Exception as e:
-        logging.warning(f"Failed to create index on users collection: {e}")
+        logging.warning("Failed to create index on users collection: %s", type(e).__name__)
     yield
 
 app = FastAPI(

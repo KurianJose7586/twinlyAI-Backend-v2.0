@@ -31,7 +31,7 @@ async def migrate():
         name = bot.get("name", "Unknown")
         
         # Determine local path
-        local_pdf = storage_root / f"{bot_id}.pdf"
+        local_pdf = storage_root / "{}.pdf".format(bot_id)
         
         if not local_pdf.exists():
             # Try another common path used in the app
@@ -60,7 +60,7 @@ async def migrate():
             print("  ❌ Error migrating %s" % name)
             errors += 1
 
-    print(f"\n✅ MIGRATION COMPLETE!")
+    print("\n✅ MIGRATION COMPLETE!")
     print("Total processed: %d" % processed)
     print("Errors: %d" % errors)
 

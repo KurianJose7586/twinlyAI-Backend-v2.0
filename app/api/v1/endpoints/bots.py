@@ -107,17 +107,22 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         # 4. ADD TO GLOBAL SEMANTIC SEARCH INDEX
         # We create a rich text representation of the candidate for the vector search to index.
         profile_text = (
-            f"Candidate Name: {update_data['name']}\n"
-            f"Professional Summary: {update_data['summary']}\n"
-            f"Top Skills: {', '.join(update_data['skills'] if update_data['skills'] else [])}\n"
-            f"Experience: {update_data['experience_years']} years."
+            "Candidate Name: {}\n"
+            "Professional Summary: {}\n"
+            "Top Skills: {}\n"
+            "Experience: {} years."
+        ).format(
+            update_data['name'],
+            update_data['summary'],
+            ', '.join(update_data['skills'] if update_data['skills'] else []),
+            update_data['experience_years']
         )
         
         global_index = GlobalRecruiterIndex()
         global_index.add_candidate_profile(bot_id=bot_id, profile_text=profile_text)
 
         return {
-            "message": f"Successfully uploaded and indexed resume for bot '{bot['name']}'",
+            "message": "Successfully uploaded and indexed resume for bot '{}'".format(bot['name']),
             "extracted_data": update_data 
         }
 
@@ -228,7 +233,7 @@ async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_us
                     recruiter_id = str(authenticated_user.get("_id"))
                     await bots_collection.update_one(
                         {"_id": obj_id},
-                        {"$set": {f"assessments.{recruiter_id}": assessment}}
+                        {"$set": {"assessments.{}".format(recruiter_id): assessment}}
                     )
                 except Exception:
                     logging.exception("Error saving assessment")

@@ -52,19 +52,19 @@ def json_to_text(json_data: dict) -> str:
     text = ""
     for key, value in json_data.items():
         if isinstance(value, dict):
-            text += f"{key.replace('_', ' ').title()}:\n"
+            text += "{}:\n".format(key.replace('_', ' ').title())
             for sub_key, sub_value in value.items():
-                text += f"  {sub_key.replace('_', ' ').title()}: {sub_value}\n"
+                text += "  {}: {}\n".format(sub_key.replace('_', ' ').title(), sub_value)
         elif isinstance(value, list):
-            text += f"{key.replace('_', ' ').title()}:\n"
+            text += "{}:\n".format(key.replace('_', ' ').title())
             for item in value:
                 if isinstance(item, dict):
                     for item_key, item_value in item.items():
-                        text += f"  - {item_key.replace('_', ' ').title()}: {item_value}\n"
+                        text += "  - {}: {}\n".format(item_key.replace('_', ' ').title(), item_value)
                 else:
-                    text += f"- {item}\n"
+                    text += "- {}\n".format(item)
         else:
-            text += f"{key.replace('_', ' ').title()}: {value}\n"
+            text += "{}: {}\n".format(key.replace('_', ' ').title(), value)
     return text
 
 # --- FILE PROCESSING (Helper Function) ---
@@ -82,7 +82,7 @@ def extract_text_from_file(file_path: Path) -> str:
             data = json.load(f)
             return json_to_text(data)
     else:
-        raise ValueError(f"Unsupported file type: {file_path.suffix}")
+        raise ValueError("Unsupported file type: {}".format(file_path.suffix))
 
 class RAGPipeline:
     def __init__(self, bot_id: str, user_id: str, bot_name: str):
@@ -93,7 +93,7 @@ class RAGPipeline:
         
         self.embeddings = get_embeddings_model()
         self.qdrant_client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
-        self.collection_name = f"bot_{self.bot_id}"
+        self.collection_name = "bot_{}".format(self.bot_id)
         
         self.llm = ChatGroq(
             model_name="llama-3.3-70b-versatile", 
@@ -119,24 +119,19 @@ class RAGPipeline:
         return None
 
     def _create_agent(self, dynamic_metadata_text: str = ""):
-        system_prompt = f"""
-You are "{self.bot_name}," a professional AI assistant and technical recruiter. Your task is to act as an agent interviewing or answering questions about the candidate based on their resume.
-**Persona & Introduction:**
-- Your name is "{self.bot_name}".
-- Introduce yourself ONLY IF requested or if it's a clear greeting. 
-- Always speak about the candidate in the third person (e.g., "He has experience in...").
+        system_prompt = """You are \"{bot_name}\", a professional AI assistant representing a candidate.
+You answer recruiter questions based on the candidate's resume.
 
-**Response Guidelines:**
-- Answer exclusively from the context and metadata below. Use the `search_resume` tool to look up details.
-- Avoid guessing dates; use `calculate_experience` to figure out durations.
-- If the tool cannot find the answer, politely state that.
-- Keep responses professional and well-formatted using Markdown.
-- DO NOT INCLUDE THE <think> </think> part in your responses.
+Here is the candidate's professional profile:
+---
+{metadata}
+---
 
-<profile_metadata>
-{dynamic_metadata_text}
-</profile_metadata>
-"""
+Rules:
+1. Only answer from the resume context. Say \"I don't have that in my resume\" if unsure.
+2. Be professional and natural.
+3. If the question is a greeting, greet back warmly.
+4. Keep answers concise.""".format(bot_name=self.bot_name, metadata=dynamic_metadata_text)
         
         # --- DEFINE TOOLS ---
         @tool
@@ -229,7 +224,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
         
         # Take the last 10 messages for context so we don't blow up token limits
         recent_history = chat_history[-10:]
-        history_text = "\n".join([f"{getattr(msg, 'type', 'unknown')}: {msg.content}" for msg in recent_history])
+        history_text = "\n".join(["{}: {}".format(getattr(msg, 'type', 'unknown'), msg.content) for msg in recent_history])
         
         parser = JsonOutputParser(pydantic_object=InterviewAssessment)
         prompt = ChatPromptTemplate.from_messages([
@@ -267,21 +262,28 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
                     proj_name = p.get('name', 'Unnamed')
                     proj_desc = p.get('description', '')
                     proj_link = p.get('link', '')
-                    projects_text += f"- {proj_name}: {proj_desc} ({proj_link})\n"
+                    projects_text += "- {}: {} ({})\n".format(proj_name, proj_desc, proj_link)
 
             # Build Links String
-            links_text += f"LinkedIn: {bot_metadata.get('linkedin_url', 'N/A')}\n"
-            links_text += f"GitHub: {bot_metadata.get('github_url', 'N/A')}\n"
-            links_text += f"Twitter: {bot_metadata.get('twitter_url', 'N/A')}\n"
-            links_text += f"Website: {bot_metadata.get('website_url', 'N/A')}\n"
+            links_text += "LinkedIn: {}\n".format(bot_metadata.get('linkedin_url', 'N/A'))
+            links_text += "GitHub: {}\n".format(bot_metadata.get('github_url', 'N/A'))
+            links_text += "Twitter: {}\n".format(bot_metadata.get('twitter_url', 'N/A'))
+            links_text += "Website: {}\n".format(bot_metadata.get('website_url', 'N/A'))
 
             meta_context = (
-                f"Name: {bot_metadata.get('name', self.bot_name)}\n"
-                f"Summary: {bot_metadata.get('summary', 'Not available')}\n"
-                f"Skills: {', '.join(bot_metadata.get('skills') or [])}\n"
-                f"Experience: {bot_metadata.get('experience_years', 'Unknown')} years\n"
-                f"{links_text}"
-                f"{projects_text}"
+                "Name: {}\n"
+                "Summary: {}\n"
+                "Skills: {}\n"
+                "Experience: {} years\n"
+                "{}"
+                "{}"
+            ).format(
+                bot_metadata.get('name', self.bot_name),
+                bot_metadata.get('summary', 'Not available'),
+                ', '.join(bot_metadata.get('skills') or []),
+                bot_metadata.get('experience_years', 'Unknown'),
+                links_text,
+                projects_text
             )
 
         # Ensure agent is instantiated with latest metadata
@@ -294,7 +296,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
             # Fallback: answer purely from metadata stored in MongoDB when Qdrant has no vectors
             if bot_metadata:
                 fallback_prompt = ChatPromptTemplate.from_messages([
-                    ("system", f"""You are \"{self.bot_name}\", a professional AI assistant representing a candidate.
+                    ("system", """You are \"{bot_name}\", a professional AI assistant representing a candidate.
 Answer questions about this person based ONLY on the information below. Speak in third person.
 If asked something not covered, politely say it's not available.
 
