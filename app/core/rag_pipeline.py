@@ -96,7 +96,7 @@ class RAGPipeline:
         self.collection_name = f"bot_{self.bot_id}"
         
         self.llm = ChatGroq(
-            model_name="openai/gpt-oss-120b", 
+            model_name="llama-3.3-70b-versatile", 
             temperature=0.7, 
             groq_api_key=settings.GROQ_API_KEY
         )
@@ -159,7 +159,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
         return create_react_agent(
             model=self.llm,
             tools=tools,
-            state_modifier=system_prompt
+            prompt=system_prompt
         )
 
     def process_file(self, file_path: str):
@@ -200,7 +200,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
         ])
         
         extraction_llm = ChatGroq(
-            model_name="openai/gpt-oss-120b",
+            model_name="llama-3.3-70b-versatile",
             temperature=0.0, 
             groq_api_key=settings.GROQ_API_KEY
         )
@@ -238,7 +238,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
         ])
         
         extraction_llm = ChatGroq(
-            model_name="openai/gpt-oss-120b",
+            model_name="llama-3.3-70b-versatile",
             temperature=0.0, 
             groq_api_key=settings.GROQ_API_KEY
         )
@@ -278,7 +278,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
             meta_context = (
                 f"Name: {bot_metadata.get('name', self.bot_name)}\n"
                 f"Summary: {bot_metadata.get('summary', 'Not available')}\n"
-                f"Skills: {', '.join(bot_metadata.get('skills', []))}\n"
+                f"Skills: {', '.join(bot_metadata.get('skills') or [])}\n"
                 f"Experience: {bot_metadata.get('experience_years', 'Unknown')} years\n"
                 f"{links_text}"
                 f"{projects_text}"
