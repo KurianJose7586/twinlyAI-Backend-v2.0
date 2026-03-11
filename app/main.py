@@ -20,7 +20,7 @@ app = FastAPI(
 if settings.ENV != "dev":
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        logging.error(f"Unhandled error: {str(exc)}")
+        logging.error("Unhandled error: %s", type(exc).__name__)
         return JSONResponse(
             status_code=500,
             content={"detail": "An internal server error occurred. Please contact support."}
@@ -28,7 +28,7 @@ if settings.ENV != "dev":
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logging.error(f"Validation error details: {exc.errors()}")
+    logging.error("Validation error details: %s", exc.errors())
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors()}

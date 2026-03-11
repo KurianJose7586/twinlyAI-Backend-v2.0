@@ -2,6 +2,7 @@
 
 import os
 import json
+import logging
 from pathlib import Path
 import pdfplumber
 from docx import Document as DocxDocument
@@ -112,7 +113,8 @@ class RAGPipeline:
                     embedding=self.embeddings
                 )
             except Exception as e:
-                print(f"Error loading Qdrant vector store: {e}")
+                print("Error loading Qdrant vector store")
+                logging.exception("Error loading Qdrant vector store")
                 return None
         return None
 
@@ -212,7 +214,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
             })
             return metadata
         except Exception as e:
-            print(f"Error extracting metadata: {e}")
+            logging.exception("Error extracting metadata")
             return {
                 "candidate_name": self.bot_name,
                 "summary": "Summary could not be extracted.",
@@ -248,7 +250,7 @@ You are "{self.bot_name}," a professional AI assistant and technical recruiter. 
             })
             return result
         except Exception as e:
-            print(f"Error analyzing interview: {e}")
+            logging.exception("Error analyzing interview")
             return {}
 
     async def get_response_stream(self, user_message: str, chat_history: list = [], bot_metadata: dict = None):
@@ -355,21 +357,20 @@ class GlobalRecruiterIndex:
           1. Embeds the query with HuggingFace directly
           2. Queries Qdrant using the unnamed dense vector (key='')
         """
-        import traceback
+        import logging as _log
 
         if not self.qdrant_client.collection_exists(self.collection_name):
-            print(f"[GlobalRecruiterIndex] Collection '{self.collection_name}' does not exist.")
+            logging.info("[GlobalRecruiterIndex] Collection '%s' does not exist.", self.collection_name)
             return []
 
         try:
             # Step 1: Embed the query using HuggingFace Inference API
-            print(f"[GlobalRecruiterIndex] Embedding query: '{query[:80]}'")
+            logging.debug("[GlobalRecruiterIndex] Embedding query: '%s'", query[:80])
             query_vector = self.embeddings.embed_query(query)
-            print(f"[GlobalRecruiterIndex] Query embedded successfully, dim={len(query_vector)}")
+            logging.debug("[GlobalRecruiterIndex] Query embedded successfully, dim=%d", len(query_vector))
         except Exception as e:
-            print(f"[GlobalRecruiterIndex] ❌ Embedding failed: {e}")
-            traceback.print_exc()
-            raise RuntimeError(f"Failed to embed search query (HuggingFace API error): {e}") from e
+            logging.exception("[GlobalRecruiterIndex] Embedding failed")
+            raise RuntimeError("Failed to embed search query.") from e
 
         try:
             # Step 2: Query Qdrant directly using the dense vector (named '')
@@ -383,7 +384,7 @@ class GlobalRecruiterIndex:
                 with_payload=True,
             )
             points = results.points
-            print(f"[GlobalRecruiterIndex] Qdrant returned {len(points)} points.")
+            logging.debug("[GlobalRecruiterIndex] Qdrant returned %d points.", len(points))
 
             # Extract unique bot_ids in relevance order
             seen: set = set()
@@ -399,10 +400,9 @@ class GlobalRecruiterIndex:
                     seen.add(bot_id)
                     unique_bot_ids.append(bot_id)
 
-            print(f"[GlobalRecruiterIndex] Unique bot_ids found: {unique_bot_ids}")
+            logging.debug("[GlobalRecruiterIndex] Unique bot_ids found: %s", unique_bot_ids)
             return unique_bot_ids
 
         except Exception as e:
-            print(f"[GlobalRecruiterIndex] ❌ Qdrant search failed: {e}")
-            traceback.print_exc()
-            raise RuntimeError(f"Qdrant search failed: {e}") from e
+            logging.exception("[GlobalRecruiterIndex] Qdrant search failed")
+            raise RuntimeError("Qdrant search failed.") from e
