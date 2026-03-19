@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # Celery & Token Encryption
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+    USE_CELERY: bool = False
     ENCRYPTION_KEY: str = "eKqVwU8_Q8o-J_j9Q1IItx02yP1TqI4-M0Z3zUo9t6s=" # Default Dev Fernet Key
 
     # Environment

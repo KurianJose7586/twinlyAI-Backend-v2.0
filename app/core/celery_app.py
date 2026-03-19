@@ -1,4 +1,5 @@
 from celery import Celery
+import platform
 from app.core.config import settings
 
 celery_app = Celery(
@@ -14,6 +15,12 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+# Windows does not reliably support Celery's default prefork pool.
+# Use solo for stable local development on Windows.
+if platform.system().lower() == "windows":
+    celery_app.conf.worker_pool = "solo"
+    celery_app.conf.worker_concurrency = 1
 
 # Optional: define beat schedule here for fallback syncs
 celery_app.conf.beat_schedule = {

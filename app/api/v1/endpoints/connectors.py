@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from authlib.integrations.starlette_client import OAuth
 from starlette.responses import RedirectResponse
 import httpx
 from datetime import datetime
 from app.core.config import settings
-from app.db.session import connectors_collection, connector_sources_collection
+from app.db.session import connectors_collection, connector_sources_collection, users_collection
 from app.core.security import encrypt_token, decrypt_token
 from app.api.v1.deps import get_current_user
 from app.schemas.user import User
-from app.worker.tasks import ingest_github_repo
+from app.worker.tasks import ingest_github_repo, _ingest_github_repo_async
+from jose import jwt, JWTError
 
 router = APIRouter()
 oauth = OAuth()
@@ -24,11 +25,35 @@ oauth.register(
 )
 
 @router.get('/github/authorize')
-async def authorize_github_connector(request: Request, current_user: User = Depends(get_current_user)):
+async def authorize_github_connector(request: Request, token: str = Query(None)):
     """
     Start the OAuth flow for connecting the candidate's GitHub account.
     We request `read:user` and `repo` scopes.
+    
+    Supports two auth methods:
+    1. Query param token (for window.location.href redirects from frontend)
+    2. Session-based auth (for standard API calls)
     """
+    user_id = None
+    
+    # Method 1: Extract user_id from JWT token query param (frontend redirect flow)
+    if token:
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            email = payload.get("sub")
+            if email:
+                user = await users_collection.find_one({"email": email})
+                if user:
+                    user_id = str(user["_id"])
+        except JWTError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        # No query param token provided - endpoint requires token for security
+        raise HTTPException(status_code=401, detail="Token parameter required")
+    
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Could not validate user")
+    
     host = request.headers['host']
     if "localhost" in host or "127.0.0.1" in host:
         scheme = "http"
@@ -38,7 +63,7 @@ async def authorize_github_connector(request: Request, current_user: User = Depe
     redirect_uri = "{}://{}/api/v1/connectors/github/callback".format(scheme, host)
     
     # Store user_id in session to link the OAuth callback to the correct user securely
-    request.session['connector_setup_user_id'] = current_user.id
+    request.session['connector_setup_user_id'] = user_id
     
     return await oauth.create_client('github_connector').authorize_redirect(request, redirect_uri)
 
@@ -80,7 +105,7 @@ async def github_connector_callback(request: Request):
     # Clean up session
     del request.session['connector_setup_user_id']
     
-    return RedirectResponse(url="{}/dashboard/connectors?status=success".format(settings.FRONTEND_URL))
+    return RedirectResponse(url="{}/candidate-active?tab=connectors&status=success".format(settings.FRONTEND_URL))
 
 @router.get('/')
 async def list_connectors(current_user: User = Depends(get_current_user)):
@@ -155,11 +180,20 @@ async def sync_github_repository(owner: str, repo: str, current_user: User = Dep
     repo_name = "{}/{}".format(owner, repo)
     
     # Check if a webhook exists, if not, create one using their token (omitted for brevity, assume manual or standard)
-    
-    # Fire off Celery Task
-    ingest_github_repo.delay(current_user.id, repo_name)
-    
-    return {"message": "Sync started for {}".format(repo_name), "status": "indexing"}
+
+    # Local-friendly mode: run inline without Redis/Celery.
+    if not settings.USE_CELERY:
+        await _ingest_github_repo_async(current_user.id, repo_name)
+        return {"message": "Sync completed for {}".format(repo_name), "status": "completed"}
+
+    # Default mode: dispatch async Celery task.
+    try:
+        ingest_github_repo.delay(current_user.id, repo_name)
+        return {"message": "Sync started for {}".format(repo_name), "status": "indexing"}
+    except Exception:
+        # Fallback if broker is unavailable.
+        await _ingest_github_repo_async(current_user.id, repo_name)
+        return {"message": "Sync completed for {} (fallback mode)".format(repo_name), "status": "completed"}
 
 @router.post('/github/webhooks/callback')
 async def github_webhook_callback(request: Request):
@@ -189,7 +223,13 @@ async def github_webhook_callback(request: Request):
         connector = await connectors_collection.find_one({"_id": ObjectId(source["connector_id"])})
         if connector:
             user_id = connector["user_id"]
-            # Trigger ingestion task for each user that tracks this repo
-            ingest_github_repo.delay(user_id, repo_name)
+            # Trigger ingestion task for each user that tracks this repo.
+            if not settings.USE_CELERY:
+                await _ingest_github_repo_async(user_id, repo_name)
+            else:
+                try:
+                    ingest_github_repo.delay(user_id, repo_name)
+                except Exception:
+                    await _ingest_github_repo_async(user_id, repo_name)
             
     return {"message": "Webhook processed successfully"}
