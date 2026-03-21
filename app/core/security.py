@@ -38,13 +38,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# --- Token Encryption ---
+# --- Token Encryption (for connector access tokens) ---
 def get_fernet() -> Fernet:
     return Fernet(settings.ENCRYPTION_KEY.encode())
 
 def encrypt_token(token: str) -> str:
     if not token: return token
-    # Fernet requires bytes
     f = get_fernet()
     return f.encrypt(token.encode()).decode()
 
@@ -52,3 +51,7 @@ def decrypt_token(encrypted_token: str) -> str:
     if not encrypted_token: return encrypted_token
     f = get_fernet()
     return f.decrypt(encrypted_token.encode()).decode()
+
+def decode_access_token(token: str) -> dict:
+    """Decode a JWT and return the payload. Raises JWTError on failure."""
+    return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
