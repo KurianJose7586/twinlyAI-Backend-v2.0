@@ -76,7 +76,12 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         logging.debug("[UPLOAD] Bot not found with user match. Bot by ID only: %s", bool(any_bot))
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(current_user.id), bot_name=bot["name"])
+    pipeline = RAGPipeline(
+        bot_id=bot_id,
+        user_id=str(current_user.id),
+        bot_name=bot["name"],
+        user_email=str(current_user.email),
+    )
     
     import tempfile
     file_location = os.path.join(tempfile.gettempdir(), file.filename)
@@ -150,7 +155,21 @@ async def chat_with_bot(bot_id: str, request_data: dict, authenticated_user: dic
         raise HTTPException(status_code=403, detail="You do not have permission for this bot")
     # -----------------------------
 
-    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+    # Fetch owner email for GitHub connector lookup
+    _bot_owner = await bots_collection.find_one({"_id": ObjectId(bot_id)})
+    _owner_email = ""
+    if _bot_owner:
+        from app.db.session import users_collection as _users_col
+        _owner = await _users_col.find_one({"_id": ObjectId(_bot_owner.get("user_id", ""))})
+        if _owner:
+            _owner_email = str(_owner.get("email", ""))
+
+    pipeline = RAGPipeline(
+        bot_id=bot_id,
+        user_id=str(bot["user_id"]),
+        bot_name=bot["name"],
+        user_email=_owner_email,
+    )
     
     # --- FIX: HANDLE ROLE VS TYPE MISMATCH ---
     chat_history = []
@@ -199,7 +218,20 @@ async def chat_with_bot_stream(bot_id: str, request_data: dict, authenticated_us
         raise HTTPException(status_code=403, detail="You do not have permission for this bot")
     # -----------------------------
 
-    pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+    # Fetch owner email for GitHub connector lookup
+    _owner_email2 = ""
+    if bot:
+        from app.db.session import users_collection as _users_col2
+        _owner2 = await _users_col2.find_one({"_id": ObjectId(bot.get("user_id", ""))})
+        if _owner2:
+            _owner_email2 = str(_owner2.get("email", ""))
+
+    pipeline = RAGPipeline(
+        bot_id=bot_id,
+        user_id=str(bot["user_id"]),
+        bot_name=bot["name"],
+        user_email=_owner_email2,
+    )
 
     # --- FIX: HANDLE ROLE VS TYPE MISMATCH ---
     chat_history = []
@@ -323,7 +355,19 @@ async def websocket_voice_endpoint(websocket: WebSocket, bot_id: str):
             await websocket.close()
             return
             
-        pipeline = RAGPipeline(bot_id=bot_id, user_id=str(bot["user_id"]), bot_name=bot["name"])
+        # Fetch owner email for GitHub connector lookup
+        _ws_owner_email = ""
+        from app.db.session import users_collection as _ws_users
+        _ws_owner = await _ws_users.find_one({"_id": ObjectId(bot.get("user_id", ""))})
+        if _ws_owner:
+            _ws_owner_email = str(_ws_owner.get("email", ""))
+
+        pipeline = RAGPipeline(
+            bot_id=bot_id,
+            user_id=str(bot["user_id"]),
+            bot_name=bot["name"],
+            user_email=_ws_owner_email,
+        )
         
         await websocket.send_text(json.dumps({"event": "ready", "message": "Connected to Voice Interview."}))
         

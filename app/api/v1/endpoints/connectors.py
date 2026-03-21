@@ -218,8 +218,39 @@ async def sync_repository(repo_name: str, current_user: User = Depends(get_curre
     """
     Fetch all indexable files from a GitHub repo, chunk them,
     embed via HuggingFace, and upsert into a per-user Qdrant collection.
+
+    Guardrails:
+    - repo_name sanitised (no path traversal)
+    - GitHub token validated before heavy work
+    - File count and size capped
+    - HuggingFace / Qdrant failures surface as 503 instead of 500
+    - Empty repo handled gracefully
     """
+    # ── GUARDRAIL: Sanitise repo_name ────────────────────────────────────────
+    import re as _re
+    if not repo_name or not _re.match(r'^[a-zA-Z0-9_.\-]+$', repo_name):
+        raise HTTPException(status_code=400, detail="Invalid repository name.")
+
     gh_token = await _get_github_token(current_user.email)
+
+    # ── GUARDRAIL: Verify GitHub token is still valid before doing heavy work ─
+    async with httpx.AsyncClient(timeout=10) as _check_client:
+        _token_check = await _check_client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"token {gh_token}", "Accept": "application/vnd.github.v3+json"},
+        )
+    if _token_check.status_code == 401:
+        # Token expired or revoked — clear it so user knows to reconnect
+        await connectors_collection.update_one(
+            {"user_email": current_user.email, "connector_type": "github"},
+            {"$set": {"status": "token_expired"}}
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub token has expired or been revoked. Please disconnect and reconnect GitHub."
+        )
+    if _token_check.status_code != 200:
+        raise HTTPException(status_code=503, detail="Could not verify GitHub token. Try again later.")
 
     # First, resolve the full_name (owner/repo) — fetch user info
     async with httpx.AsyncClient(timeout=30) as client:
@@ -320,8 +351,18 @@ async def sync_repository(repo_name: str, current_user: User = Depends(get_curre
             collection_name=collection_name,
         )
     except Exception as e:
-        print(f"[Connector] Qdrant error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to index repository: {str(e)}")
+        print(f"[Connector] Qdrant/embedding error: {e}")
+        # Surface embedding quota errors vs infrastructure errors distinctly
+        err_str = str(e).lower()
+        if "rate" in err_str or "quota" in err_str or "429" in err_str:
+            raise HTTPException(
+                status_code=429,
+                detail="Embedding service rate limit hit. Please wait a moment and try again."
+            )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to index repository. The embedding service may be temporarily unavailable."
+        )
 
     # Record sync in MongoDB
     await connectors_collection.update_one(
