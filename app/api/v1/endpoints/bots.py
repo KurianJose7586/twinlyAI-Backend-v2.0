@@ -131,9 +131,12 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
             "extracted_data": update_data 
         }
 
-    except Exception:
+    except ValueError as e:
+        logging.warning("Upload validation error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
         logging.exception("Error in upload_resume")
-        raise HTTPException(status_code=500, detail="An internal server error occurred during upload.")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred during upload: {str(e)}")
     finally:
         if os.path.exists(file_location):
             os.remove(file_location)

@@ -71,20 +71,30 @@ def json_to_text(json_data: dict) -> str:
 
 # --- FILE PROCESSING (Helper Function) ---
 def extract_text_from_file(file_path: Path) -> str:
-    if file_path.suffix == ".pdf":
-        with pdfplumber.open(file_path) as pdf:
-            return "".join(page.extract_text() for page in pdf.pages if page.extract_text())
-    elif file_path.suffix == ".docx":
-        doc = DocxDocument(file_path)
-        return "\n".join(para.text for para in doc.paragraphs)
-    elif file_path.suffix == ".txt":
-        return file_path.read_text(encoding="utf-8")
-    elif file_path.suffix == ".json":
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return json_to_text(data)
-    else:
-        raise ValueError("Unsupported file type: {}".format(file_path.suffix))
+    text = ""
+    try:
+        if file_path.suffix.lower() == ".pdf":
+            with pdfplumber.open(file_path) as pdf:
+                text = "".join(page.extract_text() or "" for page in pdf.pages)
+        elif file_path.suffix.lower() == ".docx":
+            doc = DocxDocument(file_path)
+            text = "\n".join(para.text for para in doc.paragraphs)
+        elif file_path.suffix.lower() == ".txt":
+            text = file_path.read_text(encoding="utf-8")
+        elif file_path.suffix.lower() == ".json":
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                text = json_to_text(data)
+        else:
+            raise ValueError("Unsupported file type: {}".format(file_path.suffix))
+    except Exception as e:
+        logging.error(f"Error extracting text from {file_path}: {e}")
+        raise ValueError(f"Could not read file content: {str(e)}")
+
+    if not text.strip():
+        raise ValueError("The uploaded file contains no extractable text. If this is a PDF, ensure it is not an image scan.")
+    
+    return text
 
 class RAGPipeline:
     def __init__(self, bot_id: str, user_id: str, bot_name: str, user_email: str = ""):
