@@ -58,14 +58,18 @@ origins = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
-    "http://localhost:8000", 
+    "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://twinly-ai.vercel.app",
-    "https://www.twinly-ai.vercel.app",
+    "https://twinlyai.app",
+    "https://www.twinlyai.app",
 ]
 
-if settings.FRONTEND_URL and settings.FRONTEND_URL not in origins:
-    origins.append(settings.FRONTEND_URL)
+if settings.FRONTEND_URL:
+    # Strip trailing slash to ensure exact Origin header match
+    clean_url = settings.FRONTEND_URL.rstrip("/")
+    if clean_url and clean_url not in origins:
+        origins.append(clean_url)
+
 
 app.add_middleware(
     CORSMiddleware,
