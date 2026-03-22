@@ -5,10 +5,14 @@ from app.core.config import settings
 import certifi # <-- Import certifi
 
 # --- THIS IS THE FIX ---
-# Add tlsCAFile=certifi.where() to the client connection
+# Only use tlsCAFile for production (Atlas/Cloud) connections, not local Docker
+client_kwargs = {}
+if "mongodb+srv://" in settings.MONGO_CONNECTION_STRING:
+    client_kwargs["tlsCAFile"] = certifi.where()
+
 client = AsyncIOMotorClient(
     settings.MONGO_CONNECTION_STRING,
-    tlsCAFile=certifi.where()
+    **client_kwargs
 )
 # --- END OF FIX ---
 

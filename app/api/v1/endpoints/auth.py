@@ -34,9 +34,9 @@ async def create_user(user_in: UserCreate):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this email already exists.",
         )
-    except Exception:
+    except Exception as e:
         logging.exception("Signup processing error")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred during signup. Please try again.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Signup failed: {str(e)}")
 
 @router.post("/login")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
