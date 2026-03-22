@@ -25,14 +25,41 @@ from typing import List
 # --- GLOBAL MODEL CACHE ---
 _EMBEDDINGS_MODEL = None
 
-# The get_embeddings_model() function — replace the body:
+# Embeddings strategy:
+# - ENV=prod  -> HuggingFace Inference API (cloud, uses HUGGINGFACE_API_KEY)
+# - ENV!=prod -> Local sentence-transformers model for faster local dev
+
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
-    if _EMBEDDINGS_MODEL is None:
-        # Force local embeddings for development/stability, as API can be flaky or return errors
-        logging.info("Initializing local HuggingFace Embeddings (this may take a moment to download the model)...")
-        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                
+    if _EMBEDDINGS_MODEL is not None:
+        return _EMBEDDINGS_MODEL
+
+    env = getattr(settings, "ENV", "dev")
+
+    if env == "prod":
+        # Match previous production behavior: use HuggingFace Inference API
+        logging.info("[Embeddings] Using HuggingFace Inference API (prod mode)")
+        _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
+            api_key=settings.HUGGINGFACE_API_KEY,
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    else:
+        # Local dev: prefer local CPU embeddings to avoid rate limits and to work offline
+        try:
+            logging.info("[Embeddings] Using local HuggingFaceEmbeddings (dev mode)")
+            _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+        except Exception as e:
+            logging.warning(
+                "[Embeddings] Local HuggingFaceEmbeddings failed (%s). Falling back to Inference API.",
+                type(e).__name__,
+            )
+            _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
+                api_key=settings.HUGGINGFACE_API_KEY,
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+            )
+
     return _EMBEDDINGS_MODEL
 
 
