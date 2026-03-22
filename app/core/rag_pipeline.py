@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings  # ✅
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -25,13 +25,17 @@ from typing import List
 # --- GLOBAL MODEL CACHE ---
 _EMBEDDINGS_MODEL = None
 
+# The get_embeddings_model() function — replace the body:
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
     if _EMBEDDINGS_MODEL is None:
-        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
+        _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
+            api_key=settings.HUGGINGFACE_API_KEY,
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
     return _EMBEDDINGS_MODEL
+
+
 
 # --- Pydantic model for metadata extraction ---
 class ResumeMetadata(BaseModel):
