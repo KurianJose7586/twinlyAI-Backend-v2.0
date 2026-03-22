@@ -18,6 +18,7 @@ cryptography
 langchain
 langchain-community
 langchain-groq
+langchain-huggingface
 langchain-core
 langchain-text-splitters
 pdfplumber
@@ -25,6 +26,7 @@ python-docx
 groq
 qdrant-client
 langchain-qdrant
+sentence-transformers
 
 # Pydantic for data validation
 pydantic
