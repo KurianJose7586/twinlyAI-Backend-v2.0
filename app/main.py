@@ -73,8 +73,8 @@ if settings.FRONTEND_URL:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow embeds from any origin; API keys/JWTs still gate access
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
