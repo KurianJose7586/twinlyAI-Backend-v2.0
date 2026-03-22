@@ -271,25 +271,55 @@ class RAGPipeline:
         )
 
     def process_file(self, file_path: str):
-        text_content = extract_text_from_file(Path(file_path))
-        documents = [Document(page_content=text_content)]
-        
-        # --- RECURSIVE CHARACTER TEXT SPLITTER ---
-        # Faster and avoids excessive API calls during embedding
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
-        splits = text_splitter.split_documents(documents)
+        try:
+            logging.info(f"Processing file: {file_path}")
+            text_content = extract_text_from_file(Path(file_path))
+            logging.info(f"Extracted text length: {len(text_content)}")
+            
+            if not text_content:
+                raise ValueError("No text content extracted from file")
 
-        # Build Qdrant store
-        self.vector_store = QdrantVectorStore.from_documents(
-            documents=splits, 
-            embedding=self.embeddings,
-            url=settings.QDRANT_URL,
-            api_key=settings.QDRANT_API_KEY,
-            collection_name=self.collection_name
-        )
-        
-        # Agent will be constructed dynamically during stream response to include DB metadata
-        return True
+            documents = [Document(page_content=text_content)]
+            
+            # --- RECURSIVE CHARACTER TEXT SPLITTER ---
+            # Faster and avoids excessive API calls during embedding
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
+            splits = text_splitter.split_documents(documents)
+            logging.info(f"Created {len(splits)} document splits")
+
+            # Check embeddings model
+            embeddings = self.embeddings
+            if embeddings is None:
+                logging.error("Embeddings model is None!")
+                raise ValueError("Embeddings model failed to initialize")
+            
+            logging.info(f"Using embeddings model: {type(embeddings)}")
+            
+            # Test embedding generation
+            try:
+                test_embed = embeddings.embed_query("test")
+                logging.info(f"Test embedding generation successful. Vector length: {len(test_embed)}")
+            except Exception as e:
+                logging.error(f"Failed to generate test embedding: {e}")
+                raise
+
+            logging.info(f"Connecting to Qdrant at {settings.QDRANT_URL} for collection {self.collection_name}")
+
+            # Build Qdrant store
+            self.vector_store = QdrantVectorStore.from_documents(
+                documents=splits, 
+                embedding=self.embeddings,
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY,
+                collection_name=self.collection_name
+            )
+            logging.info("Qdrant vector store created successfully")
+            
+            # Agent will be constructed dynamically during stream response to include DB metadata
+            return True
+        except Exception as e:
+            logging.exception("Error in process_file")
+            raise
         
     async def extract_metadata(self, file_path: str) -> dict:
         """
