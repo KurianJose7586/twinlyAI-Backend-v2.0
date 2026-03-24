@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings, HuggingFaceEmbeddings  # ✅
+from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpointEmbeddings  # Updated import
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -39,9 +39,8 @@ def get_embeddings_model():
     if env == "prod":
         # Match previous production behavior: use HuggingFace Inference API
         logging.info("[Embeddings] Using HuggingFace Inference API (prod mode)")
-        _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
-            api_key=settings.HUGGINGFACE_API_KEY,
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
     else:
         # Local dev: prefer local CPU embeddings to avoid rate limits and to work offline
@@ -55,9 +54,9 @@ def get_embeddings_model():
                 "[Embeddings] Local HuggingFaceEmbeddings failed (%s). Falling back to Inference API.",
                 type(e).__name__,
             )
-            _EMBEDDINGS_MODEL = HuggingFaceInferenceAPIEmbeddings(
+            _EMBEDDINGS_MODEL = HuggingFaceEndpointEmbeddings(
                 api_key=settings.HUGGINGFACE_API_KEY,
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_name="sentence-transformers/all-MiniLM-L6-v2",  # Updated to new class
             )
 
     return _EMBEDDINGS_MODEL
@@ -325,6 +324,9 @@ class RAGPipeline:
             # Test embedding generation
             try:
                 test_embed = embeddings.embed_query("test")
+                # If the result is a dict, get the first value
+                if isinstance(test_embed, dict):
+                    test_embed = list(test_embed.values())[0]
                 logging.info(f"Test embedding generation successful. Vector length: {len(test_embed)}")
             except Exception as e:
                 logging.error(f"Failed to generate test embedding: {e}")
