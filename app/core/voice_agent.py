@@ -167,7 +167,16 @@ class VoiceAgent:
             simulated_transcription = "What are your key skills?"
             logging.debug("Recruiter (simulated): %s", simulated_transcription)
             
-            # --- 2 & 3. Run Async RAG + TTS ---
+            # --- 2. Simulate Groq STT (replace with real call if available) ---
+            try:
+                logging.error(f"[Groq STT] Simulated transcription: {simulated_transcription}")
+                # If using real STT: transcription = stt_client.transcribe(audio_data)
+            except Exception as stt_e:
+                logging.exception("Groq STT error")
+                self.is_processing = False
+                continue
+            
+            # --- 3. Run Async RAG + TTS ---
             try:
                 clean_response = asyncio.run(run_async_pipeline(simulated_transcription))
                 if not clean_response:
@@ -175,6 +184,7 @@ class VoiceAgent:
                     continue
             except Exception as e:
                 logging.exception("Async pipeline error")
+                print("[Error] AI agent failed to process your request. Please try again later.")
                 self.is_processing = False
                 continue
             

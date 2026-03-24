@@ -368,6 +368,7 @@ class RAGPipeline:
         chain = prompt | extraction_llm | parser
 
         try:
+            logging.error(f"[Groq LLM] Prompt for metadata extraction: {truncated_text[:500]}...")
             metadata = await chain.ainvoke({
                 "resume_text": truncated_text,
                 "format_instructions": parser.get_format_instructions()
@@ -375,11 +376,13 @@ class RAGPipeline:
             return metadata
         except Exception as e:
             logging.exception("Error extracting metadata")
+            logging.error(f"[Groq LLM] Failed prompt: {truncated_text[:500]}...")
             return {
                 "candidate_name": self.bot_name,
-                "summary": "Summary could not be extracted.",
+                "summary": "Summary could not be extracted due to LLM error.",
                 "skills": [],
-                "experience_years": 0.0
+                "experience_years": 0.0,
+                "error": str(e)
             }
 
     async def analyze_interview(self, chat_history: list) -> dict:
@@ -404,6 +407,7 @@ class RAGPipeline:
         )
         chain = prompt | extraction_llm | parser
         try:
+            logging.error(f"[Groq LLM] Prompt for interview analysis: {history_text[:500]}...")
             result = await chain.ainvoke({
                 "history_text": history_text,
                 "format_instructions": parser.get_format_instructions()
@@ -411,7 +415,8 @@ class RAGPipeline:
             return result
         except Exception as e:
             logging.exception("Error analyzing interview")
-            return {}
+            logging.error(f"[Groq LLM] Failed prompt: {history_text[:500]}...")
+            return {"error": "LLM failed to analyze interview. Please try again later.", "details": str(e)}
 
     async def get_response_stream(self, user_message: str, chat_history: list = [], bot_metadata: dict = None):
         projects_text = ""
@@ -489,15 +494,20 @@ Candidate Profile:
                 yield "Error: The AI bot has not been properly initialized. Please upload a resume."
             return
 
-        async for event in self.agent_executor.astream_events(
-            {"messages": messages}, 
-            version="v2"
-        ):
-            kind = event["event"]
-            if kind == "on_chat_model_stream":
-                content = event["data"]["chunk"].content
-                if content:
-                    yield content
+        try:
+            async for event in self.agent_executor.astream_events(
+                {"messages": messages}, 
+                version="v2"
+            ):
+                kind = event["event"]
+                if kind == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        yield content
+        except Exception as e:
+            logging.exception("Error during LLM agent execution")
+            logging.error(f"[Groq LLM] Failed agent input: {user_message}")
+            yield f"[Error] LLM agent failed to process your request. Please try again later. ({str(e)})"
 
 # --- GLOBAL RECRUITER INDEX (SEMANTIC SEARCH) ---
 class GlobalRecruiterIndex:
