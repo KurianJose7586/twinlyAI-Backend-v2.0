@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpointEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings  # Only local embeddings
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -49,14 +49,8 @@ def get_embeddings_model():
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
         except Exception as e:
-            logging.warning(
-                "[Embeddings] Local HuggingFaceEmbeddings failed (%s). Falling back to Inference API.",
-                type(e).__name__,
-            )
-            _EMBEDDINGS_MODEL = HuggingFaceEndpointEmbeddings(
-                api_key=settings.HUGGINGFACE_API_KEY,
-                model_name="sentence-transformers/all-MiniLM-L6-v2",  # Updated to new class
-            )
+            logging.error("[Embeddings] Local HuggingFaceEmbeddings failed (%s). Embeddings will not work!", type(e).__name__)
+            raise
 
     return _EMBEDDINGS_MODEL
 
