@@ -30,7 +30,7 @@ langchain-qdrant
 # NOTE: Local CPU embeddings (large dependency, can exceed 512MB on small hosts)
 # Enable ONLY for local development if you want to avoid the Hugging Face
 # Inference API and run embeddings on your own machine.
-# sentence-transformers
+sentence-transformers
 
 # Pydantic for data validation
 pydantic
