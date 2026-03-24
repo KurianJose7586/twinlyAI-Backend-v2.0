@@ -39,9 +39,8 @@ def get_embeddings_model():
     if env == "prod":
         # Match previous production behavior: use HuggingFace Inference API
         logging.info("[Embeddings] Using HuggingFace Inference API (prod mode)")
-        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings()
+        # Uses default model (MiniLM) or set via env var: HUGGINGFACE_EMBEDDINGS_MODEL_NAME
     else:
         # Local dev: prefer local CPU embeddings to avoid rate limits and to work offline
         try:
