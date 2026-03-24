@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_huggingface import HuggingFaceEmbeddings  # Only local embeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings, HuggingFaceEmbeddings  # ✅
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -25,34 +25,17 @@ from typing import List
 # --- GLOBAL MODEL CACHE ---
 _EMBEDDINGS_MODEL = None
 
-# Embeddings strategy:
-# - ENV=prod  -> HuggingFace Inference API (cloud, uses HUGGINGFACE_API_KEY)
-# - ENV!=prod -> Local sentence-transformers model for faster local dev
-
+# The get_embeddings_model() function — replace the body:
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
-    if _EMBEDDINGS_MODEL is not None:
-        return _EMBEDDINGS_MODEL
-
-    env = getattr(settings, "ENV", "dev")
-
-    if env == "prod":
-        # Match previous production behavior: use HuggingFace Inference API
-        logging.info("[Embeddings] Using HuggingFace Inference API (prod mode)")
-        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings()
-        # Uses default model (MiniLM) or set via env var: HUGGINGFACE_EMBEDDINGS_MODEL_NAME
-    else:
-        # Local dev: prefer local CPU embeddings to avoid rate limits and to work offline
-        try:
-            logging.info("[Embeddings] Using local HuggingFaceEmbeddings (dev mode)")
-            _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
-            )
-        except Exception as e:
-            logging.error("[Embeddings] Local HuggingFaceEmbeddings failed (%s). Embeddings will not work!", type(e).__name__)
-            raise
-
+    if _EMBEDDINGS_MODEL is None:
+        # Force local embeddings for development/stability, as API can be flaky or return errors
+        logging.info("Initializing local HuggingFace Embeddings (this may take a moment to download the model)...")
+        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                
     return _EMBEDDINGS_MODEL
+
+
 
 
 
@@ -136,7 +119,7 @@ class RAGPipeline:
             self.github_collection_name = None
         
         self.llm = ChatGroq(
-            model_name="llama-3.3-70b-versatile", 
+            model_name="meta-llama/llama-4-scout-17b-16e-instruct", 
             temperature=0.7, 
             groq_api_key=settings.GROQ_API_KEY
         )
@@ -224,9 +207,15 @@ class RAGPipeline:
                 return "Resume search is temporarily unavailable. Please try again."
 
         # ── TOOL: calculate_experience ────────────────────────────────────────
-        @tool
+        """@tool
         def calculate_experience(start_year: int, end_year: int) -> int:
-            """Compute the number of years between start_year and end_year."""
+            if start_year > end_year:
+                return 0
+            return end_year - start_year"""
+        
+        @tool
+        def calculate_experience(start_year: float, end_year: float) -> float:
+            """Compute the number of years of experience between a start year and end year. Pass years as numbers like 2019, 2024."""
             if start_year > end_year:
                 return 0
             return end_year - start_year
@@ -290,58 +279,25 @@ class RAGPipeline:
         )
 
     def process_file(self, file_path: str):
-        try:
-            logging.info(f"Processing file: {file_path}")
-            text_content = extract_text_from_file(Path(file_path))
-            logging.info(f"Extracted text length: {len(text_content)}")
-            
-            if not text_content:
-                raise ValueError("No text content extracted from file")
+        text_content = extract_text_from_file(Path(file_path))
+        documents = [Document(page_content=text_content)]
+        
+        # --- RECURSIVE CHARACTER TEXT SPLITTER ---
+        # Faster and avoids excessive API calls during embedding
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
+        splits = text_splitter.split_documents(documents)
 
-            documents = [Document(page_content=text_content)]
-            
-            # --- RECURSIVE CHARACTER TEXT SPLITTER ---
-            # Faster and avoids excessive API calls during embedding
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
-            splits = text_splitter.split_documents(documents)
-            logging.info(f"Created {len(splits)} document splits")
-
-            # Check embeddings model
-            embeddings = self.embeddings
-            if embeddings is None:
-                logging.error("Embeddings model is None!")
-                raise ValueError("Embeddings model failed to initialize")
-            
-            logging.info(f"Using embeddings model: {type(embeddings)}")
-            
-            # Test embedding generation
-            try:
-                test_embed = embeddings.embed_query("test")
-                # If the result is a dict, get the first value
-                if isinstance(test_embed, dict):
-                    test_embed = list(test_embed.values())[0]
-                logging.info(f"Test embedding generation successful. Vector length: {len(test_embed)}")
-            except Exception as e:
-                logging.error(f"Failed to generate test embedding: {e}")
-                raise
-
-            logging.info(f"Connecting to Qdrant at {settings.QDRANT_URL} for collection {self.collection_name}")
-
-            # Build Qdrant store
-            self.vector_store = QdrantVectorStore.from_documents(
-                documents=splits, 
-                embedding=self.embeddings,
-                url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY,
-                collection_name=self.collection_name
-            )
-            logging.info("Qdrant vector store created successfully")
-            
-            # Agent will be constructed dynamically during stream response to include DB metadata
-            return True
-        except Exception as e:
-            logging.exception("Error in process_file")
-            raise
+        # Build Qdrant store
+        self.vector_store = QdrantVectorStore.from_documents(
+            documents=splits, 
+            embedding=self.embeddings,
+            url=settings.QDRANT_URL,
+            api_key=settings.QDRANT_API_KEY,
+            collection_name=self.collection_name
+        )
+        
+        # Agent will be constructed dynamically during stream response to include DB metadata
+        return True
         
     async def extract_metadata(self, file_path: str) -> dict:
         """
@@ -368,7 +324,6 @@ class RAGPipeline:
         chain = prompt | extraction_llm | parser
 
         try:
-            logging.error(f"[Groq LLM] Prompt for metadata extraction: {truncated_text[:500]}...")
             metadata = await chain.ainvoke({
                 "resume_text": truncated_text,
                 "format_instructions": parser.get_format_instructions()
@@ -376,13 +331,11 @@ class RAGPipeline:
             return metadata
         except Exception as e:
             logging.exception("Error extracting metadata")
-            logging.error(f"[Groq LLM] Failed prompt: {truncated_text[:500]}...")
             return {
                 "candidate_name": self.bot_name,
-                "summary": "Summary could not be extracted due to LLM error.",
+                "summary": "Summary could not be extracted.",
                 "skills": [],
-                "experience_years": 0.0,
-                "error": str(e)
+                "experience_years": 0.0
             }
 
     async def analyze_interview(self, chat_history: list) -> dict:
@@ -407,7 +360,6 @@ class RAGPipeline:
         )
         chain = prompt | extraction_llm | parser
         try:
-            logging.error(f"[Groq LLM] Prompt for interview analysis: {history_text[:500]}...")
             result = await chain.ainvoke({
                 "history_text": history_text,
                 "format_instructions": parser.get_format_instructions()
@@ -415,8 +367,7 @@ class RAGPipeline:
             return result
         except Exception as e:
             logging.exception("Error analyzing interview")
-            logging.error(f"[Groq LLM] Failed prompt: {history_text[:500]}...")
-            return {"error": "LLM failed to analyze interview. Please try again later.", "details": str(e)}
+            return {}
 
     async def get_response_stream(self, user_message: str, chat_history: list = [], bot_metadata: dict = None):
         projects_text = ""
@@ -494,20 +445,15 @@ Candidate Profile:
                 yield "Error: The AI bot has not been properly initialized. Please upload a resume."
             return
 
-        try:
-            async for event in self.agent_executor.astream_events(
-                {"messages": messages}, 
-                version="v2"
-            ):
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    content = event["data"]["chunk"].content
-                    if content:
-                        yield content
-        except Exception as e:
-            logging.exception("Error during LLM agent execution")
-            logging.error(f"[Groq LLM] Failed agent input: {user_message}")
-            yield f"[Error] LLM agent failed to process your request. Please try again later. ({str(e)})"
+        async for event in self.agent_executor.astream_events(
+            {"messages": messages}, 
+            version="v2"
+        ):
+            kind = event["event"]
+            if kind == "on_chat_model_stream":
+                content = event["data"]["chunk"].content
+                if content:
+                    yield content
 
 # --- GLOBAL RECRUITER INDEX (SEMANTIC SEARCH) ---
 class GlobalRecruiterIndex:
