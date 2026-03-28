@@ -67,9 +67,8 @@ async def github_authorize(token: str, request: Request):
     }
     # Build proper redirect URI based on incoming request host
     host = request.headers.get("host", "localhost:8000")
-    scheme = "https" if "onrender" in host or "raccoonai" in host else "http"
+    scheme = "https" if any(d in host for d in ["onrender", "raccoonai", "hf.space"]) else "http"    
     redirect_uri = f"{scheme}://{host}/api/v1/connectors/github/callback"
-
     params["redirect_uri"] = redirect_uri
     github_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     return RedirectResponse(url=github_url)

@@ -20,7 +20,7 @@ import base64
 import json
 from app.core.config import settings
 
-# Initialize Groq for Whisper (Audio transcription)
+#lmao, this is a bit of a hack to allow the Groq client to be optional for the voice interview feature, since it's not critical and we don't want the whole bot to fail if the key is missing or invalid. We'll just log a warning and disable voice STT if it can't initialize. The rest of the bot features will still work fine without it.
 try:
     groq_client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 except Exception as e:

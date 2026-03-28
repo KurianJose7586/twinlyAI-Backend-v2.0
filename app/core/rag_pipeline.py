@@ -25,18 +25,12 @@ from typing import List
 # --- GLOBAL MODEL CACHE ---
 _EMBEDDINGS_MODEL = None
 
-# The get_embeddings_model() function — replace the body:
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
     if _EMBEDDINGS_MODEL is None:
-        # Force local embeddings for development/stability, as API can be flaky or return errors
         logging.info("Initializing local HuggingFace Embeddings (this may take a moment to download the model)...")
         _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                
     return _EMBEDDINGS_MODEL
-
-
-
 
 
 # --- Pydantic model for metadata extraction ---
@@ -50,6 +44,7 @@ class InterviewAssessment(BaseModel):
     topics_covered: List[str] = Field(description="High-level topics or skills discussed so far")
     red_flags: List[str] = Field(description="Any concerns or missing skills that surfaced during the chat")
     recruiter_intent: str = Field(description="What the recruiter seems to be looking for or prioritizing")
+
 
 # --- JSON to TEXT CONVERSION (Helper Function) ---
 def json_to_text(json_data: dict) -> str:
@@ -70,6 +65,7 @@ def json_to_text(json_data: dict) -> str:
         else:
             text += "{}: {}\n".format(key.replace('_', ' ').title(), value)
     return text
+
 
 # --- FILE PROCESSING (Helper Function) ---
 def extract_text_from_file(file_path: Path) -> str:
@@ -95,8 +91,9 @@ def extract_text_from_file(file_path: Path) -> str:
 
     if not text.strip():
         raise ValueError("The uploaded file contains no extractable text. If this is a PDF, ensure it is not an image scan.")
-    
+
     return text
+
 
 class RAGPipeline:
     def __init__(self, bot_id: str, user_id: str, bot_name: str, user_email: str = ""):
@@ -105,7 +102,7 @@ class RAGPipeline:
         self.bot_name = bot_name
         self.user_email = user_email
         self.data_path = Path("data") / user_id / bot_id
-        
+
         self.embeddings = get_embeddings_model()
         self.qdrant_client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
         self.collection_name = "bot_{}".format(self.bot_id)
@@ -117,23 +114,23 @@ class RAGPipeline:
             )
         else:
             self.github_collection_name = None
-        
+
         self.llm = ChatGroq(
-            model_name="meta-llama/llama-4-scout-17b-16e-instruct", 
-            temperature=0.7, 
+            model_name="meta-llama/llama-4-scout-17b-16e-instruct",
+            temperature=0.7,
             groq_api_key=settings.GROQ_API_KEY
         )
-        
+
         self.vector_store = self._load_vector_store()
         self.github_vector_store = self._load_github_vector_store()
-        self.agent_executor = None # Will instantiate dynamically based on metadata
+        self.agent_executor = None  # Will instantiate dynamically based on metadata
 
     def _load_vector_store(self):
         if self.qdrant_client.collection_exists(self.collection_name):
             try:
                 return QdrantVectorStore(
-                    client=self.qdrant_client, 
-                    collection_name=self.collection_name, 
+                    client=self.qdrant_client,
+                    collection_name=self.collection_name,
                     embedding=self.embeddings
                 )
             except Exception as e:
@@ -207,12 +204,6 @@ class RAGPipeline:
                 return "Resume search is temporarily unavailable. Please try again."
 
         # ── TOOL: calculate_experience ────────────────────────────────────────
-        """@tool
-        def calculate_experience(start_year: int, end_year: int) -> int:
-            if start_year > end_year:
-                return 0
-            return end_year - start_year"""
-        
         @tool
         def calculate_experience(start_year: float, end_year: float) -> float:
             """Compute the number of years of experience between a start year and end year. Pass years as numbers like 2019, 2024."""
@@ -235,10 +226,8 @@ class RAGPipeline:
                 demonstrate technical depth beyond what the resume says.
                 """
                 try:
-                    # Embed query via HuggingFace (same model used during indexing)
                     query_vector = self.embeddings.embed_query(query)
 
-                    # Query Qdrant dense vector directly to avoid hybrid-collection issues
                     results = self.qdrant_client.query_points(
                         collection_name=github_coll,
                         query=query_vector,
@@ -257,7 +246,6 @@ class RAGPipeline:
                         meta = payload.get("metadata", {})
                         source = meta.get("source") or meta.get("path") or "unknown"
                         if content:
-                            # Truncate very long chunks to protect context window
                             truncated = content[:800] + ("..." if len(content) > 800 else "")
                             chunks.append("[{}]\n{}".format(source, truncated))
 
@@ -279,34 +267,48 @@ class RAGPipeline:
         )
 
     def process_file(self, file_path: str):
-        text_content = extract_text_from_file(Path(file_path))
-        documents = [Document(page_content=text_content)]
-        
-        # --- RECURSIVE CHARACTER TEXT SPLITTER ---
-        # Faster and avoids excessive API calls during embedding
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
-        splits = text_splitter.split_documents(documents)
+        try:
+            logging.info(f"Processing file: {file_path}")
+            text_content = extract_text_from_file(Path(file_path))
+            logging.info(f"Extracted text length: {len(text_content)}")
 
-        # Build Qdrant store
-        self.vector_store = QdrantVectorStore.from_documents(
-            documents=splits, 
-            embedding=self.embeddings,
-            url=settings.QDRANT_URL,
-            api_key=settings.QDRANT_API_KEY,
-            collection_name=self.collection_name
-        )
-        
-        # Agent will be constructed dynamically during stream response to include DB metadata
-        return True
-        
+            if not text_content:
+                raise ValueError("No text content extracted from file")
+
+            documents = [Document(page_content=text_content)]
+
+            # --- RECURSIVE CHARACTER TEXT SPLITTER ---
+            # Faster and avoids excessive API calls during embedding
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, length_function=len)
+            splits = text_splitter.split_documents(documents)
+            logging.info(f"Created {len(splits)} document splits")
+
+            logging.info(f"Connecting to Qdrant at {settings.QDRANT_URL} for collection {self.collection_name}")
+
+            # Build Qdrant store
+            self.vector_store = QdrantVectorStore.from_documents(
+                documents=splits,
+                embedding=self.embeddings,
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY,
+                collection_name=self.collection_name
+            )
+            logging.info("Qdrant vector store created successfully")
+
+            # Agent will be constructed dynamically during stream response to include DB metadata
+            return True
+        except Exception as e:
+            logging.exception("Error in process_file")
+            raise
+
     async def extract_metadata(self, file_path: str) -> dict:
         """
-        Uses the Maverick model to extract structured metadata (skills, exp, summary) from the resume.
+        Uses the LLM to extract structured metadata (skills, exp, summary) from the resume.
         """
         text_content = extract_text_from_file(Path(file_path))
-        
+
         # Truncate text to avoid token limits if resume is huge
-        truncated_text = text_content[:12000] 
+        truncated_text = text_content[:12000]
 
         parser = JsonOutputParser(pydantic_object=ResumeMetadata)
 
@@ -314,10 +316,10 @@ class RAGPipeline:
             ("system", "You are an expert technical recruiter and data analyst. Your task is to extract structured data from the following resume text. You must return ONLY a valid JSON object. Do not add any conversational text or markdown formatting around the JSON."),
             ("human", "Resume Text:\n{resume_text}\n\n{format_instructions}")
         ])
-        
+
         extraction_llm = ChatGroq(
             model_name="llama-3.3-70b-versatile",
-            temperature=0.0, 
+            temperature=0.0,
             groq_api_key=settings.GROQ_API_KEY
         )
 
@@ -341,21 +343,21 @@ class RAGPipeline:
     async def analyze_interview(self, chat_history: list) -> dict:
         """Analyzes the current chat history to extract interview state."""
         if len(chat_history) < 2:
-            return {} # Not enough context
-        
+            return {}  # Not enough context
+
         # Take the last 10 messages for context so we don't blow up token limits
         recent_history = chat_history[-10:]
         history_text = "\n".join(["{}: {}".format(getattr(msg, 'type', 'unknown'), msg.content) for msg in recent_history])
-        
+
         parser = JsonOutputParser(pydantic_object=InterviewAssessment)
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are an expert HR recruiter assistant analyzing a chat between a recruiter and an AI representing a candidate. Extract the current state of the interview. Always return valid JSON.\n\n{format_instructions}"),
             ("human", "Chat History:\n{history_text}")
         ])
-        
+
         extraction_llm = ChatGroq(
             model_name="llama-3.3-70b-versatile",
-            temperature=0.0, 
+            temperature=0.0,
             groq_api_key=settings.GROQ_API_KEY
         )
         chain = prompt | extraction_llm | parser
@@ -418,7 +420,6 @@ class RAGPipeline:
             logging.warning("User message truncated to 4000 chars to protect context window.")
 
         # Create agent if resume OR GitHub code is available
-        # Previously only created when resume was present, leaving GitHub-only users without an agent
         if self.vector_store or self.github_vector_store:
             self.agent_executor = self._create_agent(dynamic_metadata_text=meta_context)
 
@@ -438,7 +439,7 @@ Candidate Profile:
                     ("human", "{input}"),
                 ])
                 chain = fallback_prompt | self.llm
-                async for chunk in chain.astream({"input": user_message, "chat_history": chat_history}):
+                async for chunk in chain.astream({"input": user_message, "chat_history": chat_history, "bot_name": self.bot_name, "meta_context": meta_context}):
                     if hasattr(chunk, "content"):
                         yield chunk.content
             else:
@@ -446,7 +447,7 @@ Candidate Profile:
             return
 
         async for event in self.agent_executor.astream_events(
-            {"messages": messages}, 
+            {"messages": messages},
             version="v2"
         ):
             kind = event["event"]
@@ -454,6 +455,7 @@ Candidate Profile:
                 content = event["data"]["chunk"].content
                 if content:
                     yield content
+
 
 # --- GLOBAL RECRUITER INDEX (SEMANTIC SEARCH) ---
 class GlobalRecruiterIndex:
@@ -471,8 +473,7 @@ class GlobalRecruiterIndex:
         Adds or updates a candidate's profile in the global search index.
         """
         doc = Document(page_content=profile_text, metadata={"bot_id": bot_id})
-        
-        # Use from_documents which will create or update the collection
+
         QdrantVectorStore.from_documents(
             documents=[doc],
             embedding=self.embeddings,
@@ -491,14 +492,11 @@ class GlobalRecruiterIndex:
           1. Embeds the query with HuggingFace directly
           2. Queries Qdrant using the unnamed dense vector (key='')
         """
-        import logging as _log
-
         if not self.qdrant_client.collection_exists(self.collection_name):
             logging.info("[GlobalRecruiterIndex] Collection '%s' does not exist.", self.collection_name)
             return []
 
         try:
-            # Step 1: Embed the query using HuggingFace Inference API
             logging.debug("[GlobalRecruiterIndex] Embedding query: '%s'", query[:80])
             query_vector = self.embeddings.embed_query(query)
             logging.debug("[GlobalRecruiterIndex] Query embedded successfully, dim=%d", len(query_vector))
@@ -507,9 +505,6 @@ class GlobalRecruiterIndex:
             raise RuntimeError("Failed to embed search query.") from e
 
         try:
-            # Step 2: Query Qdrant directly using the dense vector (named '')
-            # This bypasses LangChain's QdrantVectorStore which can silently fail
-            # on hybrid collections (dense '' + sparse 'langchain-sparse').
             results = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector,

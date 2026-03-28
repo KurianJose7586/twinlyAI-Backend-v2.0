@@ -16,8 +16,14 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy the application code and data
 COPY ./app /code/app
-COPY ./data /code/data
+#COPY ./data /code/data
 
 # Expose port and start API
-EXPOSE 10000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+#old
+#EXPOSE 10000
+#CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# new
+EXPOSE 7860
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
