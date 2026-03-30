@@ -54,24 +54,21 @@ MAX_FILES_PER_REPO  = 300
 # ── 1. Initiate OAuth ──────────────────────────────────────────────────────────
 
 @router.get("/github/authorize")
-async def github_authorize(token: str, request: Request):
+async def github_authorize(token: str):
     """
     Redirect the user to GitHub to authorize Twinly.
     The JWT token is passed as `state` so we know who's connecting after callback.
     """
+    redirect_uri = f"{settings.BACKEND_URL.rstrip('/')}/api/v1/connectors/github/callback"
     params = {
         "client_id": settings.GITHUB_CLIENT_ID,
-        "redirect_uri": f"{settings.FRONTEND_URL.replace('localhost:3000', request.headers.get('host', 'localhost:8000')).split('//')[0]}//{request.headers.get('host', 'localhost:8000')}/api/v1/connectors/github/callback",
+        "redirect_uri": redirect_uri,
         "scope": "repo read:user",
         "state": token,
     }
-    # Build proper redirect URI based on incoming request host
-    host = request.headers.get("host", "localhost:8000")
-    scheme = "https" if any(d in host for d in ["onrender", "raccoonai", "hf.space"]) else "http"    
-    redirect_uri = f"{scheme}://{host}/api/v1/connectors/github/callback"
-    params["redirect_uri"] = redirect_uri
     github_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     return RedirectResponse(url=github_url)
+
 
 
 # ── 2. OAuth Callback ──────────────────────────────────────────────────────────

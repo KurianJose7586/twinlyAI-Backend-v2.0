@@ -31,6 +31,8 @@ class Settings(BaseSettings):
 
     # URL Settings (Defaults to localhost for safety)
     FRONTEND_URL: str = "http://localhost:3000"
+    BACKEND_URL: str = "http://localhost:8000"
+
 
     # Agora Settings
     AGORA_APP_ID: Optional[str] = None
