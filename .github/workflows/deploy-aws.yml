@@ -6,9 +6,8 @@ on:
   workflow_dispatch:   # allows manual trigger from GitHub Actions UI
 
 env:
-  AWS_REGION: us-east-1                  # ← change if you chose a different region
-  ECR_REPOSITORY: twinlyai-backend       # ← ECR repo name you'll create in Step 2
-  APP_RUNNER_SERVICE: twinlyai-backend   # ← App Runner service name you'll create in Step 5
+  AWS_REGION: ap-south-1                 # Mumbai — matches your App Runner region
+  ECR_REPOSITORY: twinlyai-backend       # your ECR repo name
 
 jobs:
   deploy:
@@ -35,7 +34,6 @@ jobs:
 
       # ── 4. Build, tag, push image to ECR ─────────────────────────────────
       - name: Build and push Docker image
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -45,20 +43,14 @@ jobs:
                       $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # ── 5. Deploy to App Runner ───────────────────────────────────────────
+      # ── 5. Trigger App Runner deployment ─────────────────────────────────
+      # Uses AWS CLI directly — more reliable than the community action.
+      # APP_RUNNER_SERVICE_ARN looks like:
+      # arn:aws:apprunner:ap-south-1:145554226062:service/twinlyai-backend/0cb7f621b8e64edc803d092089cd1c33
       - name: Deploy to App Runner
-        uses: awslabs/amazon-app-runner-deploy@main
-        with:
-          service:    ${{ env.APP_RUNNER_SERVICE }}
-          image:      ${{ steps.build-image.outputs.image }}
-          access-role-arn: ${{ secrets.APP_RUNNER_ROLE_ARN }}
-          region:     ${{ env.AWS_REGION }}
-          port:       7860
-          cpu:        1
-          memory:     2
-          wait-for-service-stability-seconds: 300
-
-      - name: Deployment complete
-        run: echo "Deployed successfully to AWS App Runner"
+        run: |
+          aws apprunner start-deployment \
+            --service-arn "${{ secrets.APP_RUNNER_SERVICE_ARN }}" \
+            --region ${{ env.AWS_REGION }}
+          echo "Deployment triggered on App Runner"
