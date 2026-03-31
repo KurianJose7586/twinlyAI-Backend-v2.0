@@ -27,10 +27,9 @@ groq
 qdrant-client
 langchain-qdrant
 
-# NOTE: Local CPU embeddings (large dependency, can exceed 512MB on small hosts)
-# Enable ONLY for local development if you want to avoid the Hugging Face
-# Inference API and run embeddings on your own machine.
-sentence-transformers
+# sentence-transformers REMOVED — it pulls in PyTorch (~1 GB) which causes HuggingFace Spaces
+# to hit its startup timeout. Embeddings now use HuggingFaceInferenceAPIEmbeddings (HTTP API).
+# Re-add here only if switching back to local CPU embeddings for development.
 
 # Pydantic for data validation
 pydantic
