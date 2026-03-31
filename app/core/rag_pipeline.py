@@ -9,10 +9,10 @@ from docx import Document as DocxDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from langchain_huggingface import HuggingFaceEndpointEmbeddings
-# Using HuggingFaceEndpointEmbeddings (langchain_huggingface) — the current supported class.
-# HuggingFaceInferenceAPIEmbeddings was deprecated in LangChain 0.2.2 and returns empty lists,
-# causing KeyError: 0 when Qdrant tries to determine vector size from the embeddings.
+from langchain_huggingface import HuggingFaceEmbeddings
+# Using local HuggingFaceEmbeddings — model is pre-baked into Docker image during build
+# (see Dockerfile RUN step), so there is no runtime download delay and no dependency
+# on HuggingFace Inference API tokens or permissions.
 from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -31,10 +31,9 @@ _EMBEDDINGS_MODEL = None
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
     if _EMBEDDINGS_MODEL is None:
-        logging.info("Initializing HuggingFaceEndpointEmbeddings via langchain_huggingface...")
-        _EMBEDDINGS_MODEL = HuggingFaceEndpointEmbeddings(
-            model="sentence-transformers/all-MiniLM-L6-v2",
-            huggingfacehub_api_token=settings.HUGGINGFACE_API_KEY,
+        logging.info("Loading local HuggingFaceEmbeddings (model pre-baked in Docker image)...")
+        _EMBEDDINGS_MODEL = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
         )
     return _EMBEDDINGS_MODEL
 

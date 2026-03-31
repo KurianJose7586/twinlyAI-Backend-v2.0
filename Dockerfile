@@ -14,6 +14,11 @@ COPY ./requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
+# Pre-download the sentence-transformers model during build so it's baked into
+# the image. This avoids the runtime download delay that caused startup timeouts,
+# and removes the dependency on HuggingFace Inference API permissions.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
 # Copy the application code and data
 COPY ./app /code/app
 #COPY ./data /code/data

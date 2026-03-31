@@ -27,9 +27,9 @@ groq
 qdrant-client
 langchain-qdrant
 
-# sentence-transformers REMOVED — it pulls in PyTorch (~1 GB) which causes HuggingFace Spaces
-# to hit its startup timeout. Embeddings now use HuggingFaceInferenceAPIEmbeddings (HTTP API).
-# Re-add here only if switching back to local CPU embeddings for development.
+# sentence-transformers — model is pre-downloaded during Docker build (see Dockerfile RUN step)
+# so there is NO runtime download delay and NO dependency on HuggingFace Inference API tokens.
+sentence-transformers
 
 # Pydantic for data validation
 pydantic
