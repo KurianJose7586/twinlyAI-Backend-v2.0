@@ -3,12 +3,11 @@ name: Deploy to AWS App Runner
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:   # allows manual trigger from GitHub Actions UI
+  workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1                  # ← change if you chose a different region
-  ECR_REPOSITORY: twinlyai-backend       # ← ECR repo name you'll create in Step 2
-  APP_RUNNER_SERVICE: twinlyai-backend   # ← App Runner service name you'll create in Step 5
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: twinlyai-backend
 
 jobs:
   deploy:
@@ -16,11 +15,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout code ──────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Configure AWS credentials ──────────────────────────────────────
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -28,14 +25,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      # ── 3. Log in to Amazon ECR ───────────────────────────────────────────
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # ── 4. Build, tag, push image to ECR ─────────────────────────────────
       - name: Build and push Docker image
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
@@ -45,20 +39,9 @@ jobs:
                       $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # ── 5. Deploy to App Runner ───────────────────────────────────────────
       - name: Deploy to App Runner
-        uses: awslabs/amazon-app-runner-deploy@main
-        with:
-          service:    ${{ env.APP_RUNNER_SERVICE }}
-          image:      ${{ steps.build-image.outputs.image }}
-          access-role-arn: ${{ secrets.APP_RUNNER_ROLE_ARN }}
-          region:     ${{ env.AWS_REGION }}
-          port:       7860
-          cpu:        1
-          memory:     2
-          wait-for-service-stability-seconds: 300
-
-      - name: Deployment complete
-        run: echo "Deployed successfully to AWS App Runner"
+        run: |
+          aws apprunner start-deployment \
+            --service-arn "${{ secrets.APP_RUNNER_SERVICE_ARN }}" \
+            --region ${{ env.AWS_REGION }}
