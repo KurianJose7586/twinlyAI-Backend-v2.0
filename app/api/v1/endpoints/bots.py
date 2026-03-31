@@ -76,19 +76,21 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         logging.debug("[UPLOAD] Bot not found with user match. Bot by ID only: %s", bool(any_bot))
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    pipeline = RAGPipeline(
-        bot_id=bot_id,
-        user_id=str(current_user.id),
-        bot_name=bot["name"],
-        user_email=str(current_user.email),
-    )
-    
     import tempfile
-    file_location = os.path.join(tempfile.gettempdir(), file.filename)
+    file_location = os.path.join(tempfile.gettempdir(), file.filename or "resume.pdf")
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(file.file, file_object)
 
     try:
+        # Init pipeline inside try so any connection errors (Qdrant, HF API) are caught
+        # and surfaced as a proper 500 with the real error message, not the generic handler.
+        pipeline = RAGPipeline(
+            bot_id=bot_id,
+            user_id=str(current_user.id),
+            bot_name=bot["name"],
+            user_email=str(current_user.email),
+        )
+
         # 1. Process file for RAG (Document Chunks)
         pipeline.process_file(file_location)
 
