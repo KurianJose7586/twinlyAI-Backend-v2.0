@@ -3,10 +3,11 @@ import logging
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
-from app.schemas.user import UserCreate
+from app.schemas.user import UserCreate, User
 from app.db.session import users_collection
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings
+from app.api.v1.deps import get_current_user
 from pymongo.errors import DuplicateKeyError
 
 router = APIRouter()
@@ -76,3 +77,21 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     except Exception:
         logging.exception("Login processing error")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An error occurred during login. Please try again.")
+
+
+@router.post("/refresh-token")
+async def refresh_token(current_user: User = Depends(get_current_user)):
+    """
+    Issue a fresh JWT that reflects the user's current role in the database.
+    Called after role selection (OAuth flow) to get a token with the correct role encoded.
+    """
+    # Fetch the latest user data from DB to ensure we encode the current role
+    fresh_user = await users_collection.find_one({"email": current_user.email})
+    if not fresh_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    access_token = create_access_token(
+        data={"sub": fresh_user["email"], "role": fresh_user.get("role", "candidate")},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    return {"access_token": access_token, "token_type": "bearer"}

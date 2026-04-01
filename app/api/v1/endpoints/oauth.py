@@ -60,13 +60,16 @@ async def auth_callback(request: Request, provider: str):
     email = user_info['email']
     user = await users_collection.find_one({"email": email})
 
+    is_new_user = False
     if not user:
-        # New OAuth user — create with default role and re-fetch so token has correct data
+        # New OAuth user — create with pending role; user will choose on the role-selection page
+        is_new_user = True
         new_user = {
             "email": email,
             "hashed_password": "",
-            "role": "candidate",  # Default role for new OAuth users
+            "role": "candidate",  # Temporary default; will be updated after role selection
             "subscription_tier": "free",
+            "onboarding_complete": False,
         }
         await users_collection.insert_one(new_user)
         # Re-fetch so we use the freshly created document (not the stale None)
@@ -76,7 +79,10 @@ async def auth_callback(request: Request, provider: str):
         data={"sub": email, "role": user.get("role", "candidate") if user else "candidate"},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    
-    # --- FIX: Dynamic Redirect to Frontend ---
-    response = RedirectResponse(url="{}/login?token={}".format(settings.FRONTEND_URL, access_token))
+
+    # --- NEW: Route new OAuth users to role-selection, existing users to login ---
+    if is_new_user:
+        response = RedirectResponse(url="{}/role-selection?token={}".format(settings.FRONTEND_URL, access_token))
+    else:
+        response = RedirectResponse(url="{}/login?token={}".format(settings.FRONTEND_URL, access_token))
     return response
