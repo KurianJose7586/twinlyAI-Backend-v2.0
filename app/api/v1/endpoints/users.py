@@ -3,8 +3,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.user import User, UserUpdate
 from app.api.v1.deps import get_current_user
-from app.db.session import users_collection
+from app.db.session import users_collection, activity_events_collection, bots_collection
 from bson import ObjectId
+from datetime import datetime, timezone
 
 router = APIRouter()
 
@@ -31,9 +32,46 @@ async def update_user_me(
         {"_id": current_user.id},
         {"$set": update_data}
     )
-    
+
+    # Track profile edit as activity event
+    changed_fields = list(update_data.keys())
+    if changed_fields:
+        bot = await bots_collection.find_one({"user_id": str(current_user.id)})
+        activity_doc = {
+            "user_id": str(current_user.id),
+            "bot_id": str(bot["_id"]) if bot else None,
+            "event_type": "profile",
+            "title": "Profile updated",
+            "detail": "Changed: {}".format(", ".join(changed_fields)),
+            "ref_id": None,
+            "created_at": datetime.now(timezone.utc),
+        }
+        await activity_events_collection.insert_one(activity_doc)
+
     updated_user = await users_collection.find_one({"_id": current_user.id})
     return updated_user
+
+
+@router.get("/me/activity")
+async def get_my_activity(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return a unified, date-sorted activity feed combining conversations,
+    resume uploads, and profile edits for the current user.
+    """
+    events = await activity_events_collection.find(
+        {"user_id": str(current_user.id)}
+    ).sort("created_at", -1).limit(limit).to_list(limit)
+
+    for e in events:
+        e["id"] = str(e.pop("_id"))
+        # Convert datetime to ISO string for JSON serialisation
+        if isinstance(e.get("created_at"), datetime):
+            e["created_at"] = e["created_at"].isoformat()
+
+    return events
 
 @router.post("/upgrade-me", response_model=User)
 async def upgrade_me(

@@ -29,9 +29,10 @@ except Exception as e:
 
 from app.api.v1.deps import get_current_user, get_authenticated_user
 from app.schemas.user import User
-from app.schemas.bot import Bot, BotCreate, BotUpdate
-from app.db.session import bots_collection
+from app.schemas.bot import Bot, BotCreate, BotUpdate, Conversation, ConversationCreate, ResumeVersion, ActivityEvent
+from app.db.session import bots_collection, conversations_collection, resume_versions_collection, activity_events_collection
 from app.core.rag_pipeline import RAGPipeline, GlobalRecruiterIndex
+from datetime import datetime, timezone
 
 router = APIRouter()
 
@@ -77,7 +78,8 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         raise HTTPException(status_code=404, detail="Bot not found")
 
     import tempfile
-    file_location = os.path.join(tempfile.gettempdir(), file.filename or "resume.pdf")
+    safe_filename = file.filename or "resume.pdf"
+    file_location = os.path.join(tempfile.gettempdir(), safe_filename)
     with open(file_location, "wb+") as file_object:
         shutil.copyfileobj(file.file, file_object)
 
@@ -127,6 +129,37 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         
         global_index = GlobalRecruiterIndex()
         global_index.add_candidate_profile(bot_id=bot_id, profile_text=profile_text)
+
+        # ── Save resume version ──────────────────────────────────────────────
+        # Mark all previous versions for this bot as inactive
+        await resume_versions_collection.update_many(
+            {"bot_id": bot_id, "user_id": str(current_user.id)},
+            {"$set": {"is_active": False}}
+        )
+        # Count existing versions to determine version number
+        version_count = await resume_versions_collection.count_documents({"bot_id": bot_id})
+        version_doc = {
+            "bot_id": bot_id,
+            "user_id": str(current_user.id),
+            "filename": safe_filename,
+            "uploaded_at": datetime.now(timezone.utc),
+            "is_active": True,
+            "version_number": version_count + 1,
+        }
+        await resume_versions_collection.insert_one(version_doc)
+
+        # ── Record activity event ────────────────────────────────────────────
+        activity_doc = {
+            "user_id": str(current_user.id),
+            "bot_id": bot_id,
+            "event_type": "resume",
+            "title": "Resume uploaded",
+            "detail": safe_filename,
+            "ref_id": None,
+            "created_at": datetime.now(timezone.utc),
+        }
+        await activity_events_collection.insert_one(activity_doc)
+        # ────────────────────────────────────────────────────────────────────
 
         return {
             "message": "Successfully uploaded and indexed resume for bot '{}'".format(bot['name']),
@@ -449,3 +482,147 @@ async def websocket_voice_endpoint(websocket: WebSocket, bot_id: str):
             await websocket.send_text(json.dumps({"event": "error", "message": "An internal error occurred."}))
         except Exception:
             logging.debug("Could not send WebSocket error to client")
+
+
+# ── History / Conversation endpoints ─────────────────────────────────────────
+
+@router.post("/{bot_id}/conversations", status_code=status.HTTP_201_CREATED)
+async def save_conversation(
+    bot_id: str,
+    payload: dict,
+    authenticated_user: dict = Depends(get_authenticated_user),
+):
+    """
+    Called by the frontend at the END of a chat session to persist the
+    conversation. Accepts full message history + optional recruiter metadata.
+    """
+    try:
+        obj_id = ObjectId(bot_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid bot ID")
+
+    bot = await bots_collection.find_one({"_id": obj_id})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    messages = payload.get("messages", [])
+    message_count = len(messages)
+    duration_seconds = int(payload.get("duration_seconds", 0))
+    summary = payload.get("summary") or (messages[-1]["content"][:120] if messages else None)
+
+    # Auto-classify status based on message count and keywords
+    raw_status = "cold"
+    if message_count >= 10:
+        raw_status = "qualified"
+    elif message_count >= 5:
+        raw_status = "followup"
+
+    recruiter_name = payload.get("recruiter_name") or authenticated_user.get("name") or "Unknown Recruiter"
+    recruiter_company = payload.get("recruiter_company", "")
+    recruiter_id = str(authenticated_user.get("_id", ""))
+
+    conv_doc = {
+        "bot_id": bot_id,
+        "recruiter_id": recruiter_id,
+        "recruiter_name": recruiter_name,
+        "recruiter_company": recruiter_company,
+        "recruiter_email": payload.get("recruiter_email") or authenticated_user.get("email", ""),
+        "messages": messages,
+        "message_count": message_count,
+        "duration_seconds": duration_seconds,
+        "summary": summary,
+        "status": raw_status,
+        "started_at": payload.get("started_at") or datetime.now(timezone.utc).isoformat(),
+        "ended_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = await conversations_collection.insert_one(conv_doc)
+    conv_id = str(result.inserted_id)
+
+    # Record activity event for the bot owner
+    activity_doc = {
+        "user_id": str(bot.get("user_id", "")),
+        "bot_id": bot_id,
+        "event_type": "chat",
+        "title": "Conversation with {}".format(recruiter_name),
+        "detail": recruiter_company,
+        "ref_id": conv_id,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await activity_events_collection.insert_one(activity_doc)
+
+    return {"id": conv_id, "status": raw_status}
+
+
+@router.get("/{bot_id}/conversations")
+async def get_conversations(
+    bot_id: str,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+):
+    """Return all conversations for a bot, newest first."""
+    try:
+        obj_id = ObjectId(bot_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid bot ID")
+
+    bot = await bots_collection.find_one({"_id": obj_id, "user_id": str(current_user.id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    convs = await conversations_collection.find(
+        {"bot_id": bot_id}
+    ).sort("started_at", -1).limit(limit).to_list(limit)
+
+    # Serialise ObjectId → str
+    for c in convs:
+        c["id"] = str(c.pop("_id"))
+    return convs
+
+
+@router.get("/{bot_id}/conversations/{conv_id}")
+async def get_conversation_detail(
+    bot_id: str,
+    conv_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return a single conversation with full message transcript."""
+    try:
+        bot_obj_id = ObjectId(bot_id)
+        conv_obj_id = ObjectId(conv_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    bot = await bots_collection.find_one({"_id": bot_obj_id, "user_id": str(current_user.id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    conv = await conversations_collection.find_one({"_id": conv_obj_id, "bot_id": bot_id})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conv["id"] = str(conv.pop("_id"))
+    return conv
+
+
+@router.get("/{bot_id}/resume-versions")
+async def get_resume_versions(
+    bot_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return resume upload history for a bot, newest first."""
+    try:
+        obj_id = ObjectId(bot_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid bot ID")
+
+    bot = await bots_collection.find_one({"_id": obj_id, "user_id": str(current_user.id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    versions = await resume_versions_collection.find(
+        {"bot_id": bot_id, "user_id": str(current_user.id)}
+    ).sort("uploaded_at", -1).to_list(20)
+
+    for v in versions:
+        v["id"] = str(v.pop("_id"))
+    return versions
