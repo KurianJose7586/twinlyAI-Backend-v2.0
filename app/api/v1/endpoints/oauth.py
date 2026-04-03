@@ -76,7 +76,11 @@ async def auth_callback(request: Request, provider: str):
         user = await users_collection.find_one({"email": email})
 
     access_token = create_access_token(
-        data={"sub": email, "role": user.get("role", "candidate") if user else "candidate"},
+        data={
+            "sub": email, 
+            "role": user.get("role", "candidate") if user else "candidate",
+            "onboarding_complete": user.get("onboarding_complete", False) if user else False
+        },
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 

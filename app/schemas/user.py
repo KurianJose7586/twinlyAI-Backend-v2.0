@@ -21,6 +21,7 @@ class UserBase(BaseModel):
     # Add role here so it's available in UserCreate and User response
     role: Literal["candidate", "recruiter"] = "candidate" 
     subscription_tier: Literal["free", "pro", "plus"] = "free" 
+    onboarding_complete: bool = False
 
 class UserUpdate(BaseModel):
     """
@@ -28,6 +29,7 @@ class UserUpdate(BaseModel):
     """
     email: Optional[EmailStr] = None
     role: Optional[Literal["candidate", "recruiter"]] = None
+    onboarding_complete: Optional[bool] = None
 
 class UserCreate(UserBase):
     """

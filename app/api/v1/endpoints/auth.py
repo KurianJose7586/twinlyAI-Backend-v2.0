@@ -66,9 +66,13 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Optionally include role in the token claims if needed later
+        # Optionally include role and onboarding status in the token claims
         access_token = create_access_token(
-            data={"sub": user["email"], "role": user.get("role", "candidate")},
+            data={
+                "sub": user["email"], 
+                "role": user.get("role", "candidate"),
+                "onboarding_complete": user.get("onboarding_complete", False)
+            },
             expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         )
         return {"access_token": access_token, "token_type": "bearer"}
@@ -91,7 +95,11 @@ async def refresh_token(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     access_token = create_access_token(
-        data={"sub": fresh_user["email"], "role": fresh_user.get("role", "candidate")},
+        data={
+            "sub": fresh_user["email"], 
+            "role": fresh_user.get("role", "candidate"),
+            "onboarding_complete": fresh_user.get("onboarding_complete", False)
+        },
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return {"access_token": access_token, "token_type": "bearer"}
