@@ -493,8 +493,9 @@ async def save_conversation(
     authenticated_user: dict = Depends(get_authenticated_user),
 ):
     """
-    Called by the frontend at the END of a chat session to persist the
-    conversation. Accepts full message history + optional recruiter metadata.
+    Called by the frontend to persist or update a chat session. 
+    Accepts full message history + optional recruiter metadata.
+    If 'id' is provided in payload, updates the existing conversation instead of creating a new one.
     """
     try:
         obj_id = ObjectId(bot_id)
@@ -517,6 +518,37 @@ async def save_conversation(
     elif message_count >= 5:
         raw_status = "followup"
 
+    # Check if we're updating an existing conversation
+    conv_id = payload.get("id") or payload.get("conversation_id")
+    
+    if conv_id:
+        try:
+            conv_obj_id = ObjectId(conv_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid conversation ID format")
+            
+        # Update existing conversation
+        await conversations_collection.update_one(
+            {"_id": conv_obj_id},
+            {"$set": {
+                "messages": messages,
+                "message_count": message_count,
+                "duration_seconds": duration_seconds,
+                "summary": summary,
+                "status": raw_status,
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+            }}
+        )
+        
+        # Also refresh the activity event timestamp so it stays at the top of the feed
+        await activity_events_collection.update_one(
+            {"ref_id": conv_id, "event_type": "chat"},
+            {"$set": {"created_at": datetime.now(timezone.utc)}}
+        )
+        
+        return {"id": conv_id, "status": raw_status}
+
+    # Otherwise, create NEW conversation
     recruiter_name = payload.get("recruiter_name") or authenticated_user.get("name") or "Unknown Recruiter"
     recruiter_company = payload.get("recruiter_company", "")
     recruiter_id = str(authenticated_user.get("_id", ""))
@@ -536,7 +568,7 @@ async def save_conversation(
         "ended_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await conversations_collection.insert_one(conv_doc)
-    conv_id = str(result.inserted_id)
+    new_conv_id = str(result.inserted_id)
 
     # Record activity event for the bot owner
     activity_doc = {
@@ -545,12 +577,12 @@ async def save_conversation(
         "event_type": "chat",
         "title": "Conversation with {}".format(recruiter_name),
         "detail": recruiter_company,
-        "ref_id": conv_id,
+        "ref_id": new_conv_id,
         "created_at": datetime.now(timezone.utc),
     }
     await activity_events_collection.insert_one(activity_doc)
 
-    return {"id": conv_id, "status": raw_status}
+    return {"id": new_conv_id, "status": raw_status}
 
 
 @router.get("/{bot_id}/conversations")
