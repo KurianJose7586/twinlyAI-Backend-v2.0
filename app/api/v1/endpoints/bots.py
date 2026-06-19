@@ -94,7 +94,7 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         )
 
         # 1. Process file for RAG (Document Chunks)
-        pipeline.process_file(file_location)
+        await pipeline.process_file(file_location)
 
         # 2. Extract Structured Metadata
         logging.debug("Extracting metadata for bot %s...", bot['name'])
@@ -128,7 +128,7 @@ async def upload_resume(bot_id: str, file: UploadFile = File(...), current_user:
         )
         
         global_index = GlobalRecruiterIndex()
-        global_index.add_candidate_profile(bot_id=bot_id, profile_text=profile_text)
+        await global_index.add_candidate_profile(bot_id=bot_id, profile_text=profile_text)
 
         # ── Save resume version ──────────────────────────────────────────────
         # Mark all previous versions for this bot as inactive

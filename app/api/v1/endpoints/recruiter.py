@@ -73,7 +73,7 @@ async def search_candidates(
     try:
         # 1. Run vector semantic search (now raises RuntimeError on failure instead of silent [])
         global_index = GlobalRecruiterIndex()
-        matching_bot_ids = global_index.semantic_search(search_request.query, k=10)
+        matching_bot_ids = await global_index.semantic_search(search_request.query, k=10)
 
     except RuntimeError as e:
         # Vector search failed (HuggingFace API down / Qdrant issue).

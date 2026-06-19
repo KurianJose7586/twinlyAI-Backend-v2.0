@@ -1,5 +1,6 @@
 # app/core/rag_pipeline.py
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -34,6 +35,7 @@ _EXTRACTION_LLM = None            # ChatGroq for metadata/interview extraction
 _BOT_VECTOR_STORE = None          # MongoDBAtlasVectorStore for vector_store_bots
 _GLOBAL_VECTOR_STORE = None        # MongoDBAtlasVectorStore for vector_store_global
 
+
 def get_embeddings_model():
     global _EMBEDDINGS_MODEL
     if _EMBEDDINGS_MODEL is None:
@@ -43,6 +45,7 @@ def get_embeddings_model():
         )
     return _EMBEDDINGS_MODEL
 
+
 def get_sync_mongo_client():
     global _SYNC_MONGO_CLIENT
     if _SYNC_MONGO_CLIENT is None:
@@ -51,6 +54,7 @@ def get_sync_mongo_client():
             client_kwargs["tlsCAFile"] = certifi.where()
         _SYNC_MONGO_CLIENT = MongoClient(settings.MONGO_CONNECTION_STRING, **client_kwargs)
     return _SYNC_MONGO_CLIENT
+
 
 def get_llm():
     """Module-level singleton for the primary LLM (used in chat streaming)."""
@@ -62,6 +66,7 @@ def get_llm():
             groq_api_key=settings.GROQ_API_KEY,
         )
     return _LLM_INSTANCE
+
 
 def _get_bot_vector_store():
     """Module-level singleton for the bot-specific vector store."""
@@ -78,6 +83,7 @@ def _get_bot_vector_store():
         )
     return _BOT_VECTOR_STORE
 
+
 def _get_global_vector_store():
     """Module-level singleton for the global recruiter index vector store."""
     global _GLOBAL_VECTOR_STORE
@@ -92,6 +98,7 @@ def _get_global_vector_store():
             embedding_key="embedding",
         )
     return _GLOBAL_VECTOR_STORE
+
 
 def get_extraction_llm():
     """Module-level singleton for the extraction LLM (metadata & interview analysis)."""
@@ -184,18 +191,25 @@ class RAGPipeline:
         self.db = self.mongo_client[settings.MONGO_DB_NAME]
         self.collection = self.db["vector_store_bots"]
 
-        self.github_vector_store = self._load_github_vector_store()
+        self.github_vector_store = None  # Loaded lazily on first use
+        self._github_checked = False
         self.agent_executor = None
 
-    def _load_github_vector_store(self):
-        """Checks if there's any indexed code for this user."""
-        if not self.user_email: return None
-        count = self.db["vector_store_github"].count_documents({"user_email": self.user_email})
-        return True if count > 0 else None
+    def _ensure_github_checked(self):
+        """Lazily check GitHub vector store status (only once)."""
+        if not self._github_checked:
+            if self.user_email:
+                try:
+                    count = self.db["vector_store_github"].count_documents({"user_email": self.user_email})
+                    self.github_vector_store = True if count > 0 else None
+                except Exception:
+                    self.github_vector_store = None
+            self._github_checked = True
 
     def _create_agent(self, dynamic_metadata_text: str = ""):
+        self._ensure_github_checked()
         has_github = self.github_vector_store is not None
-        
+
         # Filter for bot-specific documents only
         retriever = self.vector_store.as_retriever(
             search_kwargs={"k": 5, "pre_filter": {"bot_id": self.bot_id}}
@@ -244,24 +258,24 @@ class RAGPipeline:
 
         return create_react_agent(model=self.llm, tools=tools, prompt=system_prompt)
 
-    def process_file(self, file_path: str):
+    async def process_file(self, file_path: str):
         try:
             text_content = extract_text_from_file(Path(file_path))
             if not text_content: return False
 
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_text(text_content)
-            
+
             docs = [
                 Document(page_content=s, metadata={"bot_id": self.bot_id, "source": Path(file_path).name})
                 for s in splits
             ]
 
-            # Clear old vectors for this bot
-            self.collection.delete_many({"bot_id": self.bot_id})
-            
-            # Store new ones
-            self.vector_store.add_documents(docs)
+            # Clear old vectors for this bot — run blocking call in thread
+            await asyncio.to_thread(self.collection.delete_many, {"bot_id": self.bot_id})
+
+            # Store new ones — run blocking call in thread
+            await asyncio.to_thread(self.vector_store.add_documents, docs)
             return True
         except Exception:
             logging.exception("Error in process_file")
@@ -293,7 +307,7 @@ class RAGPipeline:
         chain = prompt | get_extraction_llm() | parser
         try:
             return await chain.ainvoke({
-                "history_text": history_text, 
+                "history_text": history_text,
                 "format_instructions": parser.get_format_instructions()
             })
         except Exception: return {}
@@ -311,8 +325,11 @@ class RAGPipeline:
             yield "Please say something."
             return
 
-        # Check if indexed docs exist to use the Agent
-        count = self.collection.count_documents({"bot_id": self.bot_id})
+        # Ensure GitHub status is checked
+        self._ensure_github_checked()
+
+        # Check if indexed docs exist to use the Agent — run blocking call in thread
+        count = await asyncio.to_thread(self.collection.count_documents, {"bot_id": self.bot_id})
         if count > 0 or self.github_vector_store:
             self.agent_executor = self._create_agent(dynamic_metadata_text=meta_context)
 
@@ -343,15 +360,16 @@ class GlobalRecruiterIndex:
         self.mongo_client = get_sync_mongo_client()
         self.collection = self.mongo_client[settings.MONGO_DB_NAME]["vector_store_global"]
 
-    def add_candidate_profile(self, bot_id: str, profile_text: str):
+    async def add_candidate_profile(self, bot_id: str, profile_text: str):
         doc = Document(page_content=profile_text, metadata={"bot_id": bot_id})
-        self.collection.delete_many({"bot_id": bot_id})
-        self.vector_store.add_documents([doc])
+        # Run blocking calls in threads
+        await asyncio.to_thread(self.collection.delete_many, {"bot_id": bot_id})
+        await asyncio.to_thread(self.vector_store.add_documents, [doc])
         return True
 
-    def semantic_search(self, query: str, k: int = 10) -> List[str]:
+    async def semantic_search(self, query: str, k: int = 10) -> List[str]:
         try:
-            results = self.vector_store.similarity_search(query, k=k)
+            results = await asyncio.to_thread(self.vector_store.similarity_search, query, k=k)
             return [str(d.metadata.get("bot_id")) for d in results if d.metadata.get("bot_id")]
         except Exception as e:
             logging.error(f"Global search error: {e}")

@@ -1,29 +1,29 @@
 # app/core/config.py
 
 from pydantic_settings import BaseSettings
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
 from typing import Optional
 
-load_dotenv()  
+load_dotenv()
 
-class Settings(BaseSettings):
+class Settings:
     """
     Application settings are loaded from environment variables.
     """
     MONGO_CONNECTION_STRING: str
     SECRET_KEY: str
-    GROQ_API_KEY: str 
+    GROQ_API_KEY: str
     HUGGINGFACE_API_KEY: str
     ALGORITHM: str = "HS256"
-    MONGO_DB_NAME: str = "twinlyai_db" 
+    MONGO_DB_NAME: str = "twinlyai_db"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-    
+
     # OAuth Settings
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
     GITHUB_CLIENT_ID: str
     GITHUB_CLIENT_SECRET: str
-    SESSION_SECRET_KEY: str 
+    SESSION_SECRET_KEY: str
 
     # Vector DB Settings
     QDRANT_URL: str
@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: Optional[str] = None
     CLOUDINARY_API_SECRET: Optional[str] = None
     STORAGE_TYPE: str = "local" # options: local, cloudinary
+
+    # Health Check Auth
+    HEALTH_CHECK_KEY: str = "change-me-in-production" # Secret key for /api/health/detailed endpoint
 
     class Config:
         env_file = ".env"

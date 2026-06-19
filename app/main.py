@@ -120,50 +120,83 @@ app.include_router(connectors.router, prefix="/api/v1/connectors", tags=["connec
 
 @app.get("/api/health")
 async def health_check():
-    health_status = {"status": "ok", "checks": {}, "env_debug": {}}
-    
+    """Public health check — returns only status, no internal details."""
+    health_status = {"status": "ok", "checks": {}}
+
     # 1. Check MongoDB
     try:
         from app.db.session import client
-        await client.admin.command('ping')
+        await client.admin.command("ping")
         health_status["checks"]["mongodb"] = "connected"
-    except Exception as e:
+    except Exception:
         health_status["status"] = "error"
-        health_status["checks"]["mongodb"] = f"failed: {str(e)}"
-        
-    # 2. Check MongoDB Vector Search (Diagnostic)
+        health_status["checks"]["mongodb"] = "unavailable"
+
+    # 2. Check MongoDB Vector Store
     try:
         from app.core.config import settings
         from app.core.rag_pipeline import get_sync_mongo_client
         mongo_client = get_sync_mongo_client()
         db = mongo_client[settings.MONGO_DB_NAME]
-        
-        # Test 2a: Basic collection count
+        bot_v_count = db["vector_store_bots"].count_documents({})
+        global_v_count = db["vector_store_global"].count_documents({})
+        health_status["checks"]["vector_store"] = "connected"
+    except Exception:
+        health_status["status"] = "error"
+        health_status["checks"]["vector_store"] = "unavailable"
+
+    return health_status
+
+
+@app.get("/api/health/detailed")
+async def health_check_detailed():
+    """Detailed health check — requires admin API key via X-Admin-Key header."""
+    from fastapi import Header, HTTPException, status
+
+    admin_key = Header(None, alias="X-Admin-Key")
+    if not admin_key or admin_key != settings.HEALTH_CHECK_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing admin key",
+        )
+
+    health_status = {"status": "ok", "checks": {}, "env_debug": {}}
+
+    # 1. Check MongoDB
+    try:
+        from app.db.session import client
+        await client.admin.command("ping")
+        health_status["checks"]["mongodb"] = "connected"
+    except Exception as e:
+        health_status["status"] = "error"
+        health_status["checks"]["mongodb"] = f"failed: {str(e)}"
+
+    # 2. Check MongoDB Vector Store (Diagnostic)
+    try:
+        from app.core.config import settings
+        from app.core.rag_pipeline import get_sync_mongo_client
+        mongo_client = get_sync_mongo_client()
+        db = mongo_client[settings.MONGO_DB_NAME]
         bot_v_count = db["vector_store_bots"].count_documents({})
         global_v_count = db["vector_store_global"].count_documents({})
         health_status["checks"]["vector_store"] = f"connected (bots: {bot_v_count}, global: {global_v_count})"
-        
-        # Test 2b: List search indexes (to verify Atlas Search is enabled)
-        # Note: This might fail on some drivers if not configured, so we wrap it
         try:
             indexes = list(db["vector_store_bots"].list_search_indexes())
             health_status["checks"]["vector_search_indexes"] = f"found {len(indexes)}"
         except Exception:
-            health_status["checks"]["vector_search_indexes"] = "unable to list (requires Atlas Search config)"
-
+            health_status["checks"]["vector_search_indexes"] = "unable to list"
     except Exception as e:
         health_status["status"] = "error"
         health_status["checks"]["vector_store"] = f"failed: {str(e)}"
 
-    # 3. Environment Variable Debug (Masked)
-    from app.core.config import settings
+    # 3. Environment debug (only for authenticated internal use)
     health_status["env_debug"] = {
         "MONGO_URI": f"{settings.MONGO_CONNECTION_STRING[:15]}...",
         "QDRANT_URL": settings.QDRANT_URL,
         "ENV": settings.ENV,
-        "FRONTEND_URL": settings.FRONTEND_URL
+        "FRONTEND_URL": settings.FRONTEND_URL,
     }
-        
+
     return health_status
 
 @app.get("/")
