@@ -24,7 +24,7 @@ from fastapi.responses import RedirectResponse
 
 from app.api.v1.deps import get_current_user
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, encrypt_token
 from app.db.session import database
 from app.schemas.user import User
 from app.core.rag_pipeline import get_embeddings_model
@@ -111,6 +111,9 @@ async def github_callback(code: str, state: str, request: Request):
         frontend = settings.FRONTEND_URL
         return RedirectResponse(url=f"{frontend}/candidate-active?connector=github&status=error&msg=no_access_token")
 
+    # Encrypt token before storing — never persist plain-text OAuth tokens
+    encrypted_token = encrypt_token(access_token)
+
     # Upsert connector in MongoDB
     await connectors_collection.update_one(
         {"user_email": user_email, "connector_type": "github"},
@@ -119,7 +122,7 @@ async def github_callback(code: str, state: str, request: Request):
                 "user_email": user_email,
                 "connector_type": "github",
                 "status": "connected",
-                "access_token": access_token,
+                "encrypted_access_token": encrypted_token,
                 "connected_at": datetime.now(timezone.utc).isoformat(),
             }
         },
@@ -152,12 +155,19 @@ async def list_connectors(current_user: User = Depends(get_current_user)):
 # ── Helper: get GitHub access token for user ──────────────────────────────────
 
 async def _get_github_token(user_email: str) -> str:
+    from app.core.security import decrypt_token
     connector = await connectors_collection.find_one(
         {"user_email": user_email, "connector_type": "github"}
     )
-    if not connector or not connector.get("access_token"):
+    if not connector:
         raise HTTPException(status_code=400, detail="GitHub account not connected. Please connect first.")
-    return connector["access_token"]
+    encrypted = connector.get("encrypted_access_token") or connector.get("access_token")
+    if not encrypted:
+        raise HTTPException(status_code=400, detail="GitHub account not connected. Please connect first.")
+    # Handle legacy unencrypted tokens (pre-migration) and new encrypted tokens
+    if connector.get("encrypted_access_token"):
+        return decrypt_token(encrypted)
+    return encrypted
 
 
 # ── 4. List repositories ───────────────────────────────────────────────────────

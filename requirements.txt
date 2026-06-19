@@ -21,6 +21,7 @@ langchain-groq
 langchain-huggingface
 langchain-core
 langchain-text-splitters
+langchain-mongodb
 pdfplumber
 python-docx
 groq

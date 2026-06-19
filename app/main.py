@@ -10,15 +10,42 @@ from fastapi.exceptions import RequestValidationError
 from app.core.config import settings
 import logging
 from contextlib import asynccontextmanager
-from app.db.session import users_collection
+from app.db.session import (
+    users_collection,
+    bots_collection,
+    api_keys_collection,
+    connectors_collection,
+    conversations_collection,
+    activity_events_collection,
+    resume_versions_collection,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Enforce unique index for users on startup
-    try:
-        await users_collection.create_index("email", unique=True)
-    except Exception as e:
-        logging.warning("Failed to create index on users collection: %s", type(e).__name__)
+    # Create indexes on startup for performance-critical queries
+    index_defs = [
+        # users
+        (users_collection, [("email", 1)], True),
+        # bots — looked up by user_id on every bot operation
+        (bots_collection, [("user_id", 1)], False),
+        # api_keys — hashed_key is checked on every API-key-authenticated request
+        (api_keys_collection, [("hashed_key", 1)], True),
+        (api_keys_collection, [("user_id", 1)], False),
+        # connectors — looked up by user_email + connector_type
+        (connectors_collection, [("user_email", 1), ("connector_type", 1)], True),
+        # conversations — queried by bot_id with sort on started_at
+        (conversations_collection, [("bot_id", 1), ("started_at", -1)], False),
+        # activity_events — queried by user_id with sort on created_at
+        (activity_events_collection, [("user_id", 1), ("created_at", -1)], False),
+        # resume_versions — queried by bot_id + user_id
+        (resume_versions_collection, [("bot_id", 1), ("user_id", 1)], False),
+    ]
+    for collection, keys, unique in index_defs:
+        try:
+            await collection.create_index(keys, unique=unique, background=True)
+        except Exception as e:
+            logging.warning("Failed to create index on %s: %s", collection.name, type(e).__name__)
+    logging.info("Database indexes ensured.")
     yield
 
 app = FastAPI(
@@ -73,8 +100,8 @@ if settings.FRONTEND_URL:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow embeds from any origin; API keys/JWTs still gate access
-    allow_credentials=False,
+    allow_origins=origins,  # Tighten to allowed origins
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
@@ -90,6 +117,54 @@ app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(recruiter.router, prefix="/api/v1/recruiter", tags=["recruiter"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["webhooks"])
 app.include_router(connectors.router, prefix="/api/v1/connectors", tags=["connectors"])
+
+@app.get("/api/health")
+async def health_check():
+    health_status = {"status": "ok", "checks": {}, "env_debug": {}}
+    
+    # 1. Check MongoDB
+    try:
+        from app.db.session import client
+        await client.admin.command('ping')
+        health_status["checks"]["mongodb"] = "connected"
+    except Exception as e:
+        health_status["status"] = "error"
+        health_status["checks"]["mongodb"] = f"failed: {str(e)}"
+        
+    # 2. Check MongoDB Vector Search (Diagnostic)
+    try:
+        from app.core.config import settings
+        from app.core.rag_pipeline import get_sync_mongo_client
+        mongo_client = get_sync_mongo_client()
+        db = mongo_client[settings.MONGO_DB_NAME]
+        
+        # Test 2a: Basic collection count
+        bot_v_count = db["vector_store_bots"].count_documents({})
+        global_v_count = db["vector_store_global"].count_documents({})
+        health_status["checks"]["vector_store"] = f"connected (bots: {bot_v_count}, global: {global_v_count})"
+        
+        # Test 2b: List search indexes (to verify Atlas Search is enabled)
+        # Note: This might fail on some drivers if not configured, so we wrap it
+        try:
+            indexes = list(db["vector_store_bots"].list_search_indexes())
+            health_status["checks"]["vector_search_indexes"] = f"found {len(indexes)}"
+        except Exception:
+            health_status["checks"]["vector_search_indexes"] = "unable to list (requires Atlas Search config)"
+
+    except Exception as e:
+        health_status["status"] = "error"
+        health_status["checks"]["vector_store"] = f"failed: {str(e)}"
+
+    # 3. Environment Variable Debug (Masked)
+    from app.core.config import settings
+    health_status["env_debug"] = {
+        "MONGO_URI": f"{settings.MONGO_CONNECTION_STRING[:15]}...",
+        "QDRANT_URL": settings.QDRANT_URL,
+        "ENV": settings.ENV,
+        "FRONTEND_URL": settings.FRONTEND_URL
+    }
+        
+    return health_status
 
 @app.get("/")
 async def root():
